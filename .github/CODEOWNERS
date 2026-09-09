@@ -1,0 +1,16 @@
+# Every file in this repository is owned by @erasylurazalin, who reviews and
+# approves all pull requests.
+#
+# GitHub uses this file to request that review automatically on every PR. Combined
+# with "Require review from Code Owners" in the main-protection ruleset, a pull
+# request cannot merge until that review is in. Reviews from other teammates are
+# welcome and useful, but they do not unlock the merge button.
+#
+# Syntax works like .gitignore: a pattern, then the owners. The last matching
+# line wins. If ownership is ever split by area, it looks like this:
+#
+#   /src/routes/orders.ts   @erasylurazalin @someone-else
+#
+# This file only takes effect once it is on the default branch.
+
+* @erasylurazalin
