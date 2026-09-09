@@ -126,10 +126,15 @@ Branch names:
 - `feat/orders-endpoint` for new features
 - `fix/event-list-limit` for bug fixes
 - `docs/api-contract-orders` for documentation
+- `chore/codeowners` for repo plumbing: config, tooling, dependency bumps
 
 Everything goes through a pull request. No pushing to `main`, including small fixes,
-including your own branch merged locally. Open the PR, get one teammate to read it,
-then merge. `npm test` and `npm run lint` have to pass first.
+including your own branch merged locally. `npm test` and `npm run lint` have to pass
+first.
+
+One branch per task, not one branch per person. Branch off an up-to-date `main`, do
+the one thing, open the PR, and let the branch die when it merges. Delete it on the
+PR page, then `git branch -d <name>` and `git fetch --prune` locally.
 
 Keep pull requests small enough that somebody can read them in ten minutes.
 
