@@ -6,7 +6,7 @@ something concrete to argue about instead of a blank page.
 Rule: if you need to change something in this file, say so in the group chat before
 you change it. Silent changes are what break the other person's code.
 
----
+----
 
 ## Conventions
 
