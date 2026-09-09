@@ -1,0 +1,19 @@
+# Store every text file with LF endings in the repository, whatever the machine
+# checking it out happens to use. Without this, Windows checkouts can commit CRLF
+# back and produce diffs where every line of a file changed for no real reason.
+* text=auto eol=lf
+
+# Files that must never be treated as text. Marking them binary stops git from
+# rewriting bytes and from printing useless line-by-line diffs for them.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+
+# The lockfile is generated. Collapsing it in pull requests keeps a dependency
+# change readable: GitHub shows "Load diff" instead of 4000 lines by default.
+package-lock.json linguist-generated=true
