@@ -1,0 +1,24 @@
+# Postgres only. The Node app runs on the host with `npm run dev`, so you can
+# restart it fast and keep your debugger attached.
+services:
+  db:
+    image: postgres:16
+    container_name: biletflow-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: biletflow
+      POSTGRES_PASSWORD: biletflow
+      POSTGRES_DB: biletflow
+    ports:
+      - '5432:5432'
+    volumes:
+      # Named volume, so `docker compose down` (without -v) keeps your data.
+      - biletflow-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U biletflow -d biletflow']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  biletflow-pgdata:
