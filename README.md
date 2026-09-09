@@ -81,7 +81,7 @@ Keep pull requests small enough that somebody can read them in ten minutes.
 
 ## Not built yet
 
-These are separate tasks and the skeleton deliberately leaves them empty:
+These are tasks:
 
 - Auth: register, login, password hashing, JWT. `src/middleware/auth.ts` is a stub that
   parses the header and throws.
