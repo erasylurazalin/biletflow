@@ -80,8 +80,7 @@ then merge. `npm test` and `npm run lint` have to pass first.
 Keep pull requests small enough that somebody can read them in ten minutes.
 
 ## Not built yet
-
-These are tasks:
+These are four tasks:
 
 - Auth: register, login, password hashing, JWT. `src/middleware/auth.ts` is a stub that
   parses the header and throws.
