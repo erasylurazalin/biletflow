@@ -13,10 +13,34 @@ otherwise.
 Node + Express + TypeScript, Postgres via `pg` with hand-written SQL (no ORM), Zod for
 input validation, Vitest for tests, Docker Compose for the database.
 
+## Requirements
+
+- **Node 24 LTS** and the npm that ships with it (npm 11 or newer)
+- Docker and Docker Compose, for the database
+
+Check what you have before anything else:
+
+```
+node -v    # v24.x.x
+npm -v     # 11.x or newer
+```
+
+If Node is older, install 24 rather than working around it. `package.json` has an
+`engines` field and `.npmrc` sets `engine-strict=true`, so npm refuses to install on
+an older version instead of quietly producing a different lockfile.
+
+With [nvm](https://github.com/nvm-sh/nvm) or [fnm](https://github.com/Schniz/fnm),
+both of which read the `.nvmrc` in this repo:
+
+```
+nvm install    # or: fnm install
+nvm use        # or: fnm use
+```
+
 ## Setup
 
 1. `git clone <repo-url> && cd biletflow`
-2. `npm install`
+2. `npm ci` (not `npm install`, see below)
 3. `cp .env.example .env` (the defaults match docker-compose.yml, so you can leave them)
 4. `docker compose up -d` starts Postgres 16 on port 5432
 5. `npm run migrate` creates the tables
@@ -34,6 +58,36 @@ Other scripts: `npm test` (Vitest, no database needed), `npm run build` and
 
 Nothing here needs Docker except the database. If you already run Postgres locally,
 skip step 4 and point `DATABASE_URL` at your own server.
+
+## Dependencies and the lockfile
+
+`package-lock.json` is committed and it is the source of truth for which versions we
+all run. Two commands, and the difference matters:
+
+- **`npm ci`** installs exactly what the lockfile says and never writes to it. This is
+  the one you use: after cloning, after pulling, whenever `node_modules` looks wrong.
+- **`npm install`** re-resolves the tree and rewrites `package-lock.json` as a side
+  effect. Only run it when you are deliberately adding or upgrading a package.
+
+Adding a dependency:
+
+```
+npm install <package>          # or npm install -D <package> for a dev tool
+```
+
+Then commit `package.json` and `package-lock.json` together, in the same pull request
+as the code that needs the package, and say in the PR description why you added it.
+
+A lockfile change with no `package.json` change next to it means somebody's npm
+rewrote the file by accident. Do not commit that. Undo it with:
+
+```
+git checkout -- package-lock.json
+npm ci
+```
+
+If that keeps happening to you, your Node or npm is not the pinned version. Run
+`node -v` again.
 
 ## How to add an endpoint
 
@@ -78,6 +132,9 @@ including your own branch merged locally. Open the PR, get one teammate to read 
 then merge. `npm test` and `npm run lint` have to pass first.
 
 Keep pull requests small enough that somebody can read them in ten minutes.
+
+Before you open one: `npm ci && npm test && npm run lint`, and check `git diff` for a
+`package-lock.json` you did not mean to change.
 
 ## Not built yet
 
