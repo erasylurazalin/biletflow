@@ -1,21 +1,14 @@
 /**
- * STUB. Not implemented yet.
+ * Verifies the Bearer JWT and puts { id, role } on req.user.
  *
- * Owner: whoever took the auth task (register, login, password hashing, JWT signing).
- * Do not fill this in if it is not your task, and do not work around it by reading the
- * header yourself inside a route.
- *
- * The shape below is the contract the rest of the code already assumes:
+ * Use it on any route that needs a logged-in user, and do not read the header yourself
+ * inside a route:
  *
  *   app.get('/api/orders', requireAuth, async (req, res) => {
  *     req.user  // { id, role }, guaranteed present after requireAuth
  *   });
  *
- * What is left to do here:
- *   1. verify the token with jsonwebtoken and process.env.JWT_SECRET
- *   2. put the payload on req.user
- *   3. throw AppError.unauthorized(...) for a missing, malformed or expired token
- * The header parsing is already written, so start at the TODO.
+ * A missing, malformed, expired or wrongly signed token is a 401.
  */
 import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
@@ -49,13 +42,14 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction): v
     throw AppError.unauthorized('Missing Bearer token');
   }
 
-  // TODO(auth owner): verify `token`, set req.user = { id, role }, then call next().
   const secret = process.env.JWT_SECRET;
   if (!secret) {
     throw new AppError(ErrorCode.INTERNAL_ERROR, 'JWT_SECRET configuration is missing', 500);
   }
 
   try {
+    // TODO: validate the payload with Zod (uuid id, one of the four roles). The cast
+    // below only tells TypeScript to trust it, nothing is checked at runtime.
     const payload = jwt.verify(token, secret) as AuthUser;
 
     if (!payload.id || !payload.role) {
