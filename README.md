@@ -142,6 +142,7 @@ Before you open one: `npm ci && npm test && npm run lint`, and check `git diff` 
 `package-lock.json` you did not mean to change.
 
 ## Not built yet
+
 These are four tasks:
 
 - Auth: register, login, password hashing, JWT. `src/middleware/auth.ts` is a stub that
