@@ -18,6 +18,7 @@
  * The header parsing is already written, so start at the TODO.
  */
 import type { NextFunction, Request, Response } from 'express';
+import jwt from 'jsonwebtoken';
 import { AppError, ErrorCode } from '../lib/errors';
 
 export interface AuthUser {
@@ -36,7 +37,7 @@ declare global {
   }
 }
 
-export function requireAuth(req: Request, _res: Response, _next: NextFunction): void {
+export function requireAuth(req: Request, _res: Response, next: NextFunction): void {
   const header = req.header('authorization');
 
   if (!header?.startsWith('Bearer ')) {
@@ -49,5 +50,28 @@ export function requireAuth(req: Request, _res: Response, _next: NextFunction): 
   }
 
   // TODO(auth owner): verify `token`, set req.user = { id, role }, then call next().
-  throw new AppError(ErrorCode.NOT_IMPLEMENTED, 'Authentication is not implemented yet', 501);
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new AppError(ErrorCode.INTERNAL_ERROR, 'JWT_SECRET configuration is missing', 500);
+  }
+
+  try {
+    const payload = jwt.verify(token, secret) as AuthUser;
+
+    if (!payload.id || !payload.role) {
+      throw AppError.unauthorized('Invalid token payload');
+    }
+
+    req.user = {
+      id: payload.id,
+      role: payload.role,
+    };
+
+    next();
+  } catch (err) {
+    if (err instanceof AppError) {
+      throw err;
+    }
+    throw AppError.unauthorized('Invalid or expired token');
+  }
 }
