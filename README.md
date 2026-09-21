@@ -138,8 +138,9 @@ PR page, then `git branch -d <name>` and `git fetch --prune` locally.
 
 Keep pull requests small enough that somebody can read them in ten minutes.
 
-Before you open one: `npm ci && npm test && npm run lint`, and check `git diff` for a
-`package-lock.json` you did not mean to change.
+Before you open one: `npm ci && npm run typecheck && npm run lint && npm run format:check && npm test`,
+and check `git diff` for a `package-lock.json` you did not mean to change. CI runs the same
+checks on every pull request, and a red check blocks the merge.
 
 ## Not built yet
 
