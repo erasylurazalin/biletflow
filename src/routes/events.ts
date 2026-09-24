@@ -26,6 +26,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { pool } from '../db/pool';
 import { AppError, ErrorCode } from '../lib/errors';
+import { requireAuth } from '../middleware/auth';
 
 export const eventsRouter = Router();
 
@@ -225,6 +226,177 @@ eventsRouter.get('/:id', async (req, res, next) => {
         cover_image_url: event.cover_image_url,
         organizer: { id: event.organizer_id, name: event.organizer_name },
         ticket_types: ticketTypesResult.rows,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+// ---------------------------------------------------------------------------
+// POST /api/events  - organizer creates a new draft event
+// ---------------------------------------------------------------------------
+
+const createEventSchema = z
+  .object({
+    title: z.string().trim().min(1).max(200),
+    description: z.string().trim().min(1),
+    venue_name: z.string().trim().min(1).max(200),
+    venue_address: z.string().trim().min(1).max(300),
+    starts_at: z.coerce.date(),
+    ends_at: z.coerce.date(),
+    cover_image_url: z.url().nullable().optional(),
+  })
+  .refine((data) => data.ends_at > data.starts_at, {
+    message: 'ends_at must be after starts_at',
+    path: ['ends_at'],
+  });
+
+eventsRouter.post('/', requireAuth, async (req, res, next) => {
+  try {
+    // Only organizers create events. Same AppError shape as every other 403 here.
+    if (req.user!.role !== 'organizer') {
+      throw AppError.forbidden('Only organizers can create events');
+    }
+
+    const parsed = createEventSchema.safeParse(req.body);
+    if (!parsed.success) {
+      const first = parsed.error.issues[0];
+      throw AppError.badRequest(
+        first
+          ? `Invalid field "${first.path.join('.')}": ${first.message}`
+          : 'Invalid event data',
+      );
+    }
+    const { title, description, venue_name, venue_address, starts_at, ends_at, cover_image_url } =
+      parsed.data;
+
+    // New events always start as drafts — status is not something the client gets to
+    // set on creation. Publishing is a separate endpoint (POST /:id/publish).
+    const result = await pool.query<EventDetailRow>(
+      `WITH inserted AS (
+         INSERT INTO events (title, description, venue_name, venue_address, starts_at,
+                              ends_at, cover_image_url, organizer_id, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft')
+         RETURNING id, title, description, venue_name, venue_address, starts_at, ends_at,
+                   status, cover_image_url, organizer_id
+       )
+       SELECT inserted.*, u.name AS organizer_name
+         FROM inserted
+         JOIN users u ON u.id = inserted.organizer_id`,
+      [title, description, venue_name, venue_address, starts_at, ends_at, cover_image_url ?? null, req.user!.id],
+    );
+    const event = result.rows[0];
+    if (!event) {
+      throw new AppError(ErrorCode.INTERNAL_ERROR, 'Failed to create event', 500);
+    }
+
+    res.status(201).json({
+      event: {
+        id: event.id,
+        title: event.title,
+        description: event.description,
+        venue_name: event.venue_name,
+        venue_address: event.venue_address,
+        starts_at: event.starts_at,
+        ends_at: event.ends_at,
+        status: event.status,
+        cover_image_url: event.cover_image_url,
+        organizer: { id: event.organizer_id, name: event.organizer_name },
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /api/events/:id  - organizer edits their own event
+// ---------------------------------------------------------------------------
+
+const updateEventSchema = z
+  .object({
+    title: z.string().trim().min(1).max(200),
+    description: z.string().trim().min(1),
+    venue_name: z.string().trim().min(1).max(200),
+    venue_address: z.string().trim().min(1).max(300),
+    starts_at: z.coerce.date(),
+    ends_at: z.coerce.date(),
+    cover_image_url: z.url().nullable(),
+    // status is deliberately not editable here: publishing is its own endpoint
+    // (POST /:id/publish, someone else's task) and PATCH should not race it.
+  })
+  .partial()
+  .refine((data) => Object.keys(data).length > 0, {
+    message: 'At least one field must be provided',
+  });
+
+eventsRouter.patch('/:id', requireAuth, async (req, res, next) => {
+  try {
+    const idParsed = idParamSchema.safeParse(req.params);
+    if (!idParsed.success) {
+      throw AppError.badRequest('Event id must be a UUID');
+    }
+    const { id } = idParsed.data;
+
+    const bodyParsed = updateEventSchema.safeParse(req.body);
+    if (!bodyParsed.success) {
+      const first = bodyParsed.error.issues[0];
+      throw AppError.badRequest(
+        first
+          ? `Invalid field "${first.path.join('.')}": ${first.message}`
+          : 'Invalid event data',
+      );
+    }
+
+    // Ownership is checked against the database, not the JWT: role alone doesn't say
+    // whose event this is. This also gets us organizer_name for the response for free.
+    const ownerResult = await pool.query<{ organizer_id: string; organizer_name: string }>(
+      `SELECT e.organizer_id, u.name AS organizer_name
+         FROM events e
+         JOIN users u ON u.id = e.organizer_id
+        WHERE e.id = $1`,
+      [id],
+    );
+    const owner = ownerResult.rows[0];
+    if (!owner) {
+      throw AppError.notFound(ErrorCode.EVENT_NOT_FOUND, 'Event not found');
+    }
+    if (owner.organizer_id !== req.user!.id) {
+      throw AppError.forbidden('You can only edit your own events');
+    }
+
+    // Keys come from the parsed Zod object, never straight from req.body, so this is
+    // building SQL from a fixed, known field set — not from arbitrary user input.
+    const fields = Object.entries(bodyParsed.data).filter(([, value]) => value !== undefined);
+    const setClause = fields.map(([key], i) => `${key} = $${i + 1}`).join(', ');
+    const values = fields.map(([, value]) => value);
+
+    // No updated_at here on purpose: the events_set_updated_at trigger (001_init.sql)
+    // stamps it automatically on every UPDATE.
+    const updateResult = await pool.query<EventDetailRow>(
+      `UPDATE events
+          SET ${setClause}
+        WHERE id = $${fields.length + 1}
+        RETURNING id, title, description, venue_name, venue_address, starts_at, ends_at,
+                  status, cover_image_url, organizer_id`,
+      [...values, id],
+    );
+    const event = updateResult.rows[0];
+    if (!event) {
+      throw new AppError(ErrorCode.INTERNAL_ERROR, 'Failed to create event', 500);
+    }
+    res.json({
+      event: {
+        id: event.id,
+        title: event.title,
+        description: event.description,
+        venue_name: event.venue_name,
+        venue_address: event.venue_address,
+        starts_at: event.starts_at,
+        ends_at: event.ends_at,
+        status: event.status,
+        cover_image_url: event.cover_image_url,
+        organizer: { id: event.organizer_id, name: owner.organizer_name },
       },
     });
   } catch (err) {
