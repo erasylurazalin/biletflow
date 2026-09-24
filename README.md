@@ -1,8 +1,10 @@
 # BiletFlow
 
 Event ticketing for Kazakhstan. Organizers create events and issue QR-code tickets,
-attendees buy or reserve them, and door staff scan the codes with a mobile app. This
-repo is the backend: Node, Express, TypeScript and Postgres with plain SQL.
+attendees buy or reserve them, and door staff scan the codes with a mobile app.
+
+Backend is Node, Express, TypeScript and Postgres with plain SQL. Frontend is a
+basic Next.js app in `web/` (the event list and detail pages read from the API).
 
 The API contract lives in [docs/api.md](docs/api.md). Read it before you write a
 route. If your endpoint and the doc disagree, the doc wins until the group chat says
@@ -150,4 +152,6 @@ These are four tasks:
   parses the header and throws.
 - Write endpoints for events and ticket types.
 - Orders, tickets, QR payloads, payments, check-in.
-- The frontend and the mobile scanner app.
+- The rest of the frontend (checkout, auth, my tickets) and the mobile scanner app.
+
+Frontend scaffold: `cd web && npm ci && npm run dev` → http://localhost:3001
