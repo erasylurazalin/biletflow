@@ -10,7 +10,10 @@ services:
       POSTGRES_PASSWORD: biletflow
       POSTGRES_DB: biletflow
     ports:
-      - '5432:5432'
+      # Loopback only. The password above is public, and Docker's port
+      # publishing bypasses the host firewall, so '5432:5432' would hand the
+      # database to anyone on the same Wi-Fi.
+      - '127.0.0.1:5432:5432'
     volumes:
       # Named volume, so `docker compose down` (without -v) keeps your data.
       - biletflow-pgdata:/var/lib/postgresql/data
