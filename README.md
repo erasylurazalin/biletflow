@@ -4,7 +4,7 @@ Event ticketing for Kazakhstan. Organizers create events and issue QR-code ticke
 attendees buy or reserve them, and door staff scan the codes with a mobile app.
 
 Backend is Node, Express, TypeScript and Postgres with plain SQL. Frontend is a
-basic Next.js app in `web/` (mock data for now).
+basic Next.js app in `web/` (the event list and detail pages read from the API).
 
 The API contract lives in [docs/api.md](docs/api.md). Read it before you write a
 route. If your endpoint and the doc disagree, the doc wins until the group chat says

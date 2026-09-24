@@ -18,11 +18,10 @@ export default function RootLayout({ children }: LayoutProps<'/'>) {
     <html lang="en" className={`${geistSans.variable} h-full antialiased`}>
       <body className="min-h-full bg-zinc-50 text-zinc-900">
         <header className="border-b border-zinc-200 bg-white">
-          <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
+          <div className="mx-auto flex max-w-5xl items-center px-4 py-3">
             <Link href="/" className="text-lg font-semibold tracking-tight">
               BiletFlow
             </Link>
-            <span className="text-sm text-zinc-500">mock data · no backend yet</span>
           </div>
         </header>
         <main className="mx-auto w-full max-w-5xl px-4 py-8">{children}</main>
