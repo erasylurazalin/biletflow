@@ -88,6 +88,25 @@ The list endpoint returns events **without** `ticket_types` and with a shortened
 description. Detail returns everything. Frontend should not assume list items are
 complete.
 
+### List responses
+
+Every list endpoint wraps its array in an envelope that echoes the paging used:
+
+```json
+{
+  "events": [ ... ],
+  "limit": 20,
+  "offset": 0
+}
+```
+
+Paging comes from the query string: `GET /api/events?limit=50&offset=50`. `limit`
+defaults to 20 and caps at 100, `offset` defaults to 0. `q` filters on the title.
+
+The array key is the plural of what is listed (`events`, `orders`, `tickets`), so a
+client always reads `body.events` and never a bare array. This is our pick, not a
+standard: agreed in the group chat, and implemented in `GET /api/events`.
+
 ---
 
 ## Ticket Types
@@ -205,6 +224,12 @@ POST /api/staff/check-in/:ticket_id/undo
   "checked_in_at": "..."    // present when already_used
 }
 ```
+
+`GET /api/staff/events` means the events this person is assigned to, and assignments
+live in the `event_staff` table (migration 002): one row per event and user, written
+when an organizer puts somebody on the door. Role `event_admin` alone opens no event.
+An unassigned staff member gets an empty list, and scanning a ticket for an event they
+are not assigned to is `403`.
 
 Always `200` unless the request itself is broken. A bad ticket is a normal
 answer, not an HTTP error — the app shows a red screen, not a crash.
