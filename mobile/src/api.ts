@@ -141,8 +141,8 @@ async function apiOther<T>(path: string, request: string, what?: object): Promis
     return (await response.json()) as T;
 }
 
-async function apiPost (path: string, body?: object) {
-    return apiOther(path, "POST", body);
+async function apiPost<T>(path: string, body?: object): Promise<T> {
+    return apiOther<T>(path, "POST", body);
 }
 
 async function apiPatch(path: string, body?: object) {
@@ -188,7 +188,7 @@ export async function listStaffEventAttedees(id: string) /* : Promise<User> */ {
     
 }
 
-export async function getUser() /* : Promise<User> */ { // /auth/me
+export async function getUser() : Promise<User> { // /auth/me
     return (await apiGet<{user : User}>("/api/auth/me")).user;
 }
 
@@ -203,12 +203,13 @@ export async function undoCheckin(ticketId: string) {
 
 }
 
-export async function registerUser(email: string, password: string, name: string) /* : Promise<AuthResponse> */ {
-
+export async function registerUser(email: string, password: string, name: string) : Promise<AuthResponse> {
+    let body = {"email": email, "password": password, "name": name};
+    return apiPost<AuthResponse>("/auth/register", body);
 }
 
-export async function loginUser(email: string, password: string) {
-
+export async function loginUser(email: string, password: string) : Promise<AuthResponse> {
+    return apiPost<AuthResponse>("/auth/login", {"email": email, "password": password});
 }
 
 export async function createEvent(event: EventDetail) {
