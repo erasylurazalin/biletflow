@@ -6,9 +6,9 @@ import { useEffect, useState } from "react";
 
 export default function Profile() {
 
-    let [login, setLogin] = useState<string|null>(null);
-    let [profile, setProfile] = useState<User|null>(null);
-    let [loading, setLoading] = useState<boolean>(true);
+    const [login, setLogin] = useState<string|null>(null);
+    const [profile, setProfile] = useState<User|null>(null);
+    const [loading, setLoading] = useState<boolean>(true);
 
     useEffect(() => {
         async function checkAuth() {
