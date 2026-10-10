@@ -1,0 +1,37 @@
+# Runs the same checks the README asks for before a pull request, on a clean machine.
+# A clean machine is the point: it catches a package that is installed on your laptop
+# but missing from package.json, which is exactly how PR #9 broke main.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# A new push to the same pull request cancels the run that is still going.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # npm ci, never npm install: it fails if package.json and the lockfile disagree.
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run format:check
+      # The tests mock the database, so no Postgres is needed here.
+      - run: npm test

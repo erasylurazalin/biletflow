@@ -1,12 +1,15 @@
 /**
- * JWT auth. signToken() is called by register/login in routes/auth.ts; requireAuth
- * guards everything that needs a logged-in user:
+ * Verifies the Bearer JWT and puts { id, role } on req.user. signToken() issues the
+ * token for register/login in routes/auth.ts.
+ *
+ * Use it on any route that needs a logged-in user, and do not read the header yourself
+ * inside a route:
  *
  *   app.get('/api/orders', requireAuth, async (req, res) => {
  *     req.user  // { id, role }, guaranteed present after requireAuth
  *   });
  *
- * A missing, malformed or expired token becomes a 401 through AppError.unauthorized.
+ * A missing, malformed, expired or wrongly signed token is a 401.
  */
 import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
@@ -61,6 +64,8 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction): v
   const secret = getSecret();
 
   try {
+    // TODO: validate the payload with Zod (uuid id, one of the four roles). The cast
+    // below only tells TypeScript to trust it, nothing is checked at runtime.
     const payload = jwt.verify(token, secret) as AuthUser;
 
     if (!payload.id || !payload.role) {
