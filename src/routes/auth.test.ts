@@ -136,6 +136,18 @@ describe('POST /api/auth/login', () => {
     expect(res.status).toBe(401);
     expect(res.body.error.message).toBe('Email or password is incorrect');
   });
+
+  it('still runs bcrypt for an unknown email, so timing does not reveal accounts', async () => {
+    query.mockResolvedValueOnce(rows([]));
+    const compare = vi.spyOn(bcrypt, 'compare');
+
+    await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'nobody@example.kz', password: 'correct-horse' });
+
+    expect(compare).toHaveBeenCalledOnce();
+    compare.mockRestore();
+  });
 });
 
 describe('GET /api/auth/me', () => {

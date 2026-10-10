@@ -17,6 +17,11 @@ export const authRouter = Router();
 // 10 rounds is ~50-100ms per hash: slow for an attacker, unnoticeable for a person.
 const BCRYPT_ROUNDS = 10;
 
+// Compared against when login finds no user, so an unknown email costs the same bcrypt
+// time as a wrong password and response timing does not reveal who has an account.
+// Same rounds as real hashes, or the timing would still differ.
+const DUMMY_HASH = bcrypt.hashSync('dummy-password-for-timing', BCRYPT_ROUNDS);
+
 // Postgres error code for a unique constraint violation.
 const PG_UNIQUE_VIOLATION = '23505';
 
@@ -119,9 +124,10 @@ authRouter.post('/login', async (req, res, next) => {
     );
     const row = result.rows[0];
 
-    // Same message for "no such email" and "wrong password", so the login form cannot
-    // be used to find out who has an account.
-    if (!row || !(await bcrypt.compare(password, row.password_hash))) {
+    // Same message and same bcrypt work for "no such email" and "wrong password", so
+    // the login form cannot be used to find out who has an account.
+    const passwordOk = await bcrypt.compare(password, row?.password_hash ?? DUMMY_HASH);
+    if (!row || !passwordOk) {
       throw AppError.unauthorized('Email or password is incorrect');
     }
 
