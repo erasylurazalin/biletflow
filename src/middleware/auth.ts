@@ -1,5 +1,6 @@
 /**
- * Verifies the Bearer JWT and puts { id, role } on req.user.
+ * Verifies the Bearer JWT and puts { id, role } on req.user. signToken() issues the
+ * token for register/login in routes/auth.ts.
  *
  * Use it on any route that needs a logged-in user, and do not read the header yourself
  * inside a route:
@@ -30,6 +31,24 @@ declare global {
   }
 }
 
+// How long a login lasts. There are no refresh tokens yet, so after this the user logs
+// in again.
+const TOKEN_EXPIRES_IN = '7d';
+
+function getSecret(): string {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new AppError(ErrorCode.INTERNAL_ERROR, 'JWT_SECRET configuration is missing', 500);
+  }
+  return secret;
+}
+
+export function signToken(user: AuthUser): string {
+  return jwt.sign({ id: user.id, role: user.role }, getSecret(), {
+    expiresIn: TOKEN_EXPIRES_IN,
+  });
+}
+
 export function requireAuth(req: Request, _res: Response, next: NextFunction): void {
   const header = req.header('authorization');
 
@@ -42,10 +61,7 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction): v
     throw AppError.unauthorized('Missing Bearer token');
   }
 
-  const secret = process.env.JWT_SECRET;
-  if (!secret) {
-    throw new AppError(ErrorCode.INTERNAL_ERROR, 'JWT_SECRET configuration is missing', 500);
-  }
+  const secret = getSecret();
 
   try {
     // TODO: validate the payload with Zod (uuid id, one of the four roles). The cast
