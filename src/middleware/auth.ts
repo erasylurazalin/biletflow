@@ -1,21 +1,12 @@
 /**
- * STUB. Not implemented yet.
- *
- * Owner: whoever took the auth task (register, login, password hashing, JWT signing).
- * Do not fill this in if it is not your task, and do not work around it by reading the
- * header yourself inside a route.
- *
- * The shape below is the contract the rest of the code already assumes:
+ * JWT auth. signToken() is called by register/login in routes/auth.ts; requireAuth
+ * guards everything that needs a logged-in user:
  *
  *   app.get('/api/orders', requireAuth, async (req, res) => {
  *     req.user  // { id, role }, guaranteed present after requireAuth
  *   });
  *
- * What is left to do here:
- *   1. verify the token with jsonwebtoken and process.env.JWT_SECRET
- *   2. put the payload on req.user
- *   3. throw AppError.unauthorized(...) for a missing, malformed or expired token
- * The header parsing is already written, so start at the TODO.
+ * A missing, malformed or expired token becomes a 401 through AppError.unauthorized.
  */
 import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
@@ -37,6 +28,24 @@ declare global {
   }
 }
 
+// How long a login lasts. There are no refresh tokens yet, so after this the user logs
+// in again.
+const TOKEN_EXPIRES_IN = '7d';
+
+function getSecret(): string {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new AppError(ErrorCode.INTERNAL_ERROR, 'JWT_SECRET configuration is missing', 500);
+  }
+  return secret;
+}
+
+export function signToken(user: AuthUser): string {
+  return jwt.sign({ id: user.id, role: user.role }, getSecret(), {
+    expiresIn: TOKEN_EXPIRES_IN,
+  });
+}
+
 export function requireAuth(req: Request, _res: Response, next: NextFunction): void {
   const header = req.header('authorization');
 
@@ -49,11 +58,7 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction): v
     throw AppError.unauthorized('Missing Bearer token');
   }
 
-  // TODO(auth owner): verify `token`, set req.user = { id, role }, then call next().
-  const secret = process.env.JWT_SECRET;
-  if (!secret) {
-    throw new AppError(ErrorCode.INTERNAL_ERROR, 'JWT_SECRET configuration is missing', 500);
-  }
+  const secret = getSecret();
 
   try {
     const payload = jwt.verify(token, secret) as AuthUser;

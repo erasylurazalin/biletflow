@@ -9,6 +9,7 @@
  * last, because Express runs middleware in the order it was mounted.
  */
 import express from 'express';
+import { authRouter } from './routes/auth';
 import { eventsRouter } from './routes/events';
 import { errorHandler, notFoundHandler } from './middleware/error-handler';
 
@@ -22,6 +23,7 @@ export function createApp() {
     res.json({ status: 'ok' });
   });
 
+  app.use('/api/auth', authRouter);
   app.use('/api/events', eventsRouter);
 
   app.use(notFoundHandler);
