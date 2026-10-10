@@ -13,12 +13,18 @@
  */
 import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
+import { z } from 'zod';
 import { AppError, ErrorCode } from '../lib/errors';
 
-export interface AuthUser {
-  id: string;
-  role: 'attendee' | 'organizer' | 'event_admin' | 'platform_admin';
-}
+// What a valid token must carry. A correct signature only proves we issued the token,
+// so the contents are still checked: an unknown role or a non-uuid id is a 401, never
+// a req.user the routes trust. Extra claims (iat, exp) are stripped.
+const tokenPayloadSchema = z.object({
+  id: z.uuid(),
+  role: z.enum(['attendee', 'organizer', 'event_admin', 'platform_admin']),
+});
+
+export type AuthUser = z.infer<typeof tokenPayloadSchema>;
 
 // Teaches TypeScript that req.user exists. Optional, because on public routes such as
 // GET /api/events nobody has attached it.
@@ -63,25 +69,19 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction): v
 
   const secret = getSecret();
 
+  let decoded: unknown;
   try {
-    // TODO: validate the payload with Zod (uuid id, one of the four roles). The cast
-    // below only tells TypeScript to trust it, nothing is checked at runtime.
-    const payload = jwt.verify(token, secret) as AuthUser;
-
-    if (!payload.id || !payload.role) {
-      throw AppError.unauthorized('Invalid token payload');
-    }
-
-    req.user = {
-      id: payload.id,
-      role: payload.role,
-    };
-
-    next();
-  } catch (err) {
-    if (err instanceof AppError) {
-      throw err;
-    }
+    // Pinning the algorithm stops a token from choosing how it gets verified.
+    decoded = jwt.verify(token, secret, { algorithms: ['HS256'] });
+  } catch {
     throw AppError.unauthorized('Invalid or expired token');
   }
+
+  const parsed = tokenPayloadSchema.safeParse(decoded);
+  if (!parsed.success) {
+    throw AppError.unauthorized('Invalid token payload');
+  }
+
+  req.user = parsed.data;
+  next();
 }
