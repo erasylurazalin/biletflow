@@ -46,6 +46,30 @@ async function seed(): Promise<void> {
     ],
   );
 
+  // An organizer is a user with an organizer profile (migration 003). The payout
+  // account is demonstration data, like every payout in the MVP.
+  await pool.query(
+    `INSERT INTO organizer_profiles (user_id, display_name, contact_email, contact_phone,
+                                     payout_bank_name, payout_iban, payout_account_holder)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (user_id) DO UPDATE
+       SET display_name = EXCLUDED.display_name,
+           contact_email = EXCLUDED.contact_email,
+           contact_phone = EXCLUDED.contact_phone,
+           payout_bank_name = EXCLUDED.payout_bank_name,
+           payout_iban = EXCLUDED.payout_iban,
+           payout_account_holder = EXCLUDED.payout_account_holder`,
+    [
+      ORGANIZER_ID,
+      'Astana Tech Community',
+      'organizer@biletflow.kz',
+      '+77011234567',
+      'Demo Bank',
+      'KZ000000000000000000',
+      'Aigerim S.',
+    ],
+  );
+
   // starts_at is relative to now() so the demo events are always upcoming, however
   // long after today somebody clones this repo.
   await pool.query(
@@ -108,7 +132,7 @@ async function seed(): Promise<void> {
     ],
   );
 
-  console.log('Seeded 2 users, 2 published events, 3 ticket types.');
+  console.log('Seeded 2 users, 1 organizer profile, 2 published events, 3 ticket types.');
   console.log(`Try: GET /api/events/${EVENT_TECH_ID}`);
 }
 

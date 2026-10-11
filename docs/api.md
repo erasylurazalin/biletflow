@@ -56,6 +56,56 @@ GET  /api/auth/me                                           -> { user }
 }
 ```
 
+Everyone registers as `attendee`. Creating an organizer profile (below) is what turns a
+user into an `organizer`. The role lives in the token, so after it changes the client
+uses the new token: the one `POST /api/me/organizer-profile` returns, or one from a
+fresh login.
+
+---
+
+## Organizer profile
+
+Becoming an organizer is self-service: no approval. Verification is a separate, later
+step that only gates paid ticket sales. It never blocks creating events.
+
+```
+POST  /api/me/organizer-profile   { display_name, contact_email?, contact_phone?, payout? }
+                                  -> { organizer_profile, user, token }
+GET   /api/me/organizer-profile   -> { organizer_profile }
+PATCH /api/me/organizer-profile   { any of the POST fields } -> { organizer_profile }
+```
+
+```json
+"organizer_profile": {
+  "user_id": "uuid",
+  "display_name": "Astana Tech Community",
+  "contact_email": "hello@astanatech.kz" | null,
+  "contact_phone": "+77011234567" | null,
+  "payout": {                          // or null when no payout account is set
+    "bank_name": "Demo Bank",
+    "iban": "KZ000000000000000000",
+    "account_holder": "Aidos K."
+  },
+  "created_at": "...",
+  "updated_at": "..."
+}
+```
+
+All three need a token, and all three work on the caller's own profile only.
+
+- `POST` creates the profile and switches the caller's role to `organizer`. A
+  `platform_admin` keeps their role. It answers `201` with the updated `user` and a new
+  `token` carrying the new role. A second `POST` is `409 CONFLICT`: edit with `PATCH`.
+- `display_name` is required, and at least one of `contact_email` and `contact_phone`.
+  The phone is in international format and is stored without spaces or dashes:
+  `"+7 (701) 123-45-67"` becomes `"+77011234567"`. The email is stored lower-cased.
+- `payout` is optional. When sent, it needs all three fields; the IBAN is stored
+  upper-case without spaces. **Payout details are demonstration data**: payouts are
+  simulated in the academic MVP, so the IBAN shape is checked but nothing is ever paid.
+- `PATCH` changes only the fields sent. `null` clears `contact_email`, `contact_phone`
+  or `payout`, but the profile must keep at least one contact (`400` otherwise).
+- `GET` or `PATCH` without a profile is `404 ORGANIZER_PROFILE_NOT_FOUND`.
+
 ---
 
 ## Events
@@ -63,7 +113,7 @@ GET  /api/auth/me                                           -> { user }
 ```
 GET    /api/events                    public list (published only)
 GET    /api/events/:id                public detail
-POST   /api/events                    organizer creates
+POST   /api/events                    organizer creates (role organizer: has a profile)
 PATCH  /api/events/:id                organizer edits
 POST   /api/events/:id/publish        draft -> published
 ```
@@ -138,6 +188,9 @@ DELETE /api/ticket-types/:id
 ## Orders (the important one)
 
 Two steps: create the order, then pay for it. Do not merge these.
+
+Buying needs a logged-in user of any role, not the `attendee` role: organizers and
+door staff go to other people's events too.
 
 ```
 POST /api/orders          { event_id, items: [{ ticket_type_id, quantity }] }
