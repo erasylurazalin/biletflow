@@ -11,6 +11,7 @@
 import express from 'express';
 import { authRouter } from './routes/auth';
 import { eventsRouter } from './routes/events';
+import { staffRouter } from './routes/staff';
 import { ticketTypesRouter } from './routes/ticket-types';
 import { errorHandler, notFoundHandler } from './middleware/error-handler';
 
@@ -27,6 +28,7 @@ export function createApp() {
   app.use('/api/auth', authRouter);
   app.use('/api/events', eventsRouter);
   app.use('/api', ticketTypesRouter);
+  app.use('/api', staffRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

@@ -208,6 +208,39 @@ The app sends the whole string back to the server. It does not parse or trust it
 
 ---
 
+## Staff assignments (organizer)
+
+The organizer puts people on the door of their event. Being assigned is what makes a
+user that event's admin: any registered user can be assigned (the organizer too), and
+assigning does not change their `role`.
+
+```
+POST   /api/events/:id/staff            { email }   -> { staff_member }
+GET    /api/events/:id/staff                        -> { staff, limit, offset }
+DELETE /api/events/:id/staff/:userId                -> 204
+```
+
+```json
+"staff_member": {
+  "id": "uuid",              // the user's id, which is what DELETE takes
+  "email": "dana@example.kz",
+  "name": "Dana",
+  "assigned_at": "2026-10-01T09:00:00Z"
+}
+```
+
+All three need a token, and all three are for the event's organizer only: anyone else
+gets `403 FORBIDDEN`, and a missing event is `404 EVENT_NOT_FOUND`.
+
+- `POST` looks the email up case-insensitively. No account with that email is
+  `404 USER_NOT_FOUND`: the person has to register first. A new assignment answers
+  `201`. Assigning somebody who is already assigned is not an error: it answers `200`
+  with the existing assignment and changes nothing.
+- `GET` is a list endpoint with the usual `limit` and `offset`, oldest assignment first.
+- `DELETE` answers `404 NOT_FOUND` when that user is not on the event's staff.
+
+---
+
 ## Check-in (mobile app)
 
 ```
@@ -230,6 +263,11 @@ live in the `event_staff` table (migration 002): one row per event and user, wri
 when an organizer puts somebody on the door. Role `event_admin` alone opens no event.
 An unassigned staff member gets an empty list, and scanning a ticket for an event they
 are not assigned to is `403`.
+
+`GET /api/staff/events` uses the list envelope (`{ events, limit, offset }`) and the
+same item shape as `GET /api/events`, soonest first. It lists events in every status,
+not only published ones: staff can be put on the door before the event is published,
+and a cancelled event shows up as `"cancelled"` instead of vanishing from the app.
 
 Always `200` unless the request itself is broken. A bad ticket is a normal
 answer, not an HTTP error — the app shows a red screen, not a crash.
