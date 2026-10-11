@@ -226,14 +226,57 @@ Inventory is held when the order is created, released when it expires.
 Free tickets go through the same flow — `total` is just `0` and `/pay` succeeds
 immediately. One code path, not two.
 
+### Creating an order
+
+All four need a token.
+
+- `items` has at least one entry, and each `ticket_type_id` appears once. `quantity` is
+  a whole number from 1 to 10, and the whole order is at most 10 tickets (SRS 4.3 asks
+  for a per-order limit; a limit the organizer sets comes later). Anything else is
+  `400 VALIDATION_ERROR`.
+- The event must be published. A draft or a missing event is `404 EVENT_NOT_FOUND`,
+  the same as the public detail. A cancelled event is `409 CONFLICT`.
+- Every ticket type must belong to that event and must not be hidden, otherwise
+  `400 VALIDATION_ERROR`. Hidden types become buyable with promo codes, which are not
+  specified yet.
+- Outside a ticket type's `sales_start_at` and `sales_end_at` the order is
+  `409 SALES_CLOSED`. Not enough left is `409 TICKET_SOLD_OUT`.
+- `name` and `unit_price` are copied from the ticket type into the order, so a later
+  price change does not touch it. `subtotal` is the sum of the items, `discount` is
+  `0` until promo codes exist, and `total` is `subtotal - discount`.
+- `expires_at` is 10 minutes after `created_at`. A pending order past that time holds
+  no inventory and reads as `cancelled`.
+- Paid sales activation (SRS 4.5) is not built yet. Until it is, paid ticket types can
+  be ordered and `/pay` is a labelled simulation.
+
+### Paying and reading orders
+
+- Orders belong to the buyer. Somebody else's order is `404 ORDER_NOT_FOUND`, not
+  `403`, so ids of other people's orders cannot be probed.
+- `/pay` on a pending order marks it `paid` and issues one ticket per admission: an
+  item with `quantity: 2` gives two tickets. The order comes back with its `tickets`.
+  On an expired order it is `409 ORDER_EXPIRED`. On a paid or cancelled order it is
+  `409 CONFLICT`.
+- Each ticket's `attendee_name` is the buyer's account name for now. SRS 4.6 wants
+  attendee details at checkout; per-ticket names are a later addition to the request
+  body.
+- `GET /api/orders` ("my orders") uses the list envelope: `{ orders, limit, offset }`,
+  newest first, every status. List items leave out `tickets`; `GET /api/orders/:id`
+  has them.
+
 ---
 
 ## Tickets
 
 ```
+GET /api/tickets             my tickets -> { tickets, limit, offset }
 GET /api/tickets/:id
 GET /api/tickets/:id/pdf     -> application/pdf
 ```
+
+All three need a token and show only tickets from the caller's own orders. Anyone
+else's ticket is `404 TICKET_NOT_FOUND`. `GET /api/tickets` lists tickets in every
+status, soonest event first, with the same item shape as below.
 
 ```json
 "ticket": {
@@ -248,14 +291,21 @@ GET /api/tickets/:id/pdf     -> application/pdf
 ```
 
 **`qr_payload` is the string the QR image encodes.** This is the one field where
-backend and the mobile app have to agree exactly. Format proposal:
+backend and the mobile app have to agree exactly. The format:
 
 ```
 BF1:<ticket_id>:<hmac_signature>
+BF1:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:3aCMMhEA4oqbvzq1cElUe_EbD_aItVWk7NSjPnZSHIw
 ```
 
-`BF1` = version prefix, so the scanner can reject anything that isn't ours —
-including campaign/promo QR codes, which must never open the door.
+- `BF1` is the version prefix, so the scanner can reject anything that isn't ours,
+  including Campaign QR Codes, which must never open the door (SRS 4.14).
+- `ticket_id` is the ticket's UUID, lower-case.
+- `hmac_signature` is HMAC-SHA256 over `BF1:<ticket_id>` with the server's secret,
+  in base64url without padding: always 43 characters.
+
+`src/lib/qr.ts` signs and verifies it. The payload is not stored: the server computes
+it whenever it returns a ticket, so changing the secret invalidates every old QR code.
 
 The app sends the whole string back to the server. It does not parse or trust it.
 
@@ -305,11 +355,16 @@ POST /api/staff/check-in/:ticket_id/undo
 
 ```json
 {
-  "result": "valid" | "already_used" | "cancelled" | "refunded" | "not_found" | "wrong_event",
-  "ticket": { ... },        // null if not_found
+  "result": "valid" | "already_used" | "cancelled" | "refunded" | "invalid" | "not_found" | "wrong_event",
+  "ticket": { ... },        // null if invalid or not_found
   "checked_in_at": "..."    // present when already_used
 }
 ```
+
+`invalid` means the scanned string is not a ticket we signed: a Campaign QR Code, some
+other QR code, or a forged or damaged payload. `not_found` means the signature is
+right but no such ticket exists, which in practice means the database was reset after
+the ticket was issued.
 
 `GET /api/staff/events` means the events this person is assigned to, and assignments
 live in the `event_staff` table (migration 002): one row per event and user, written

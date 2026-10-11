@@ -1,5 +1,6 @@
 /**
- * Demo data so `GET /api/events` returns something on a fresh database.
+ * Demo data so a fresh database has something to show: events to browse, a person on
+ * the door, and two paid tickets to scan.
  *
  * Run it with `npm run seed`. Safe to run twice: every row has a hard-coded id and is
  * inserted with ON CONFLICT (id) DO UPDATE, so a second run refreshes the rows instead
@@ -7,7 +8,9 @@
  *
  * This is fake data for development. Do not run it against anything real.
  */
+import bcrypt from 'bcryptjs';
 import { pool } from './pool';
+import { signTicketPayload } from '../lib/qr';
 
 // Hard-coded UUIDs are what makes the script idempotent, and they are handy in
 // Postman: you can paste them into a URL and know the row exists.
@@ -21,28 +24,42 @@ const EVENT_JAZZ_ID = '44444444-4444-4444-8444-444444444444';
 const TT_TECH_EARLY_ID = '55555555-5555-4555-8555-555555555555';
 const TT_TECH_REGULAR_ID = '66666666-6666-4666-8666-666666666666';
 const TT_JAZZ_STANDARD_ID = '77777777-7777-4777-8777-777777777777';
+const DOOR_ID = '88888888-8888-4888-8888-888888888888';
+const ORDER_ID = '99999999-9999-4999-8999-999999999999';
+const ORDER_ITEM_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const TICKET_1_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const TICKET_2_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 
-// Auth is not built yet, so there is no real hashing function to call here. Login will
-// simply not work for these users until that lands, which is fine for GET endpoints.
-const PLACEHOLDER_HASH = 'seed-placeholder-not-a-real-hash';
+// Every seeded user logs in with this password. It is printed at the end of the run,
+// which is fine for dev data and would be a disaster anywhere else.
+const DEV_PASSWORD = 'biletflow-dev';
 
 async function seed(): Promise<void> {
+  // Same rounds as routes/auth.ts, so login treats these like any other account. The
+  // password is reset on every run, in case somebody changed it while testing.
+  const passwordHash = await bcrypt.hash(DEV_PASSWORD, 10);
+
+  // The door user is a plain attendee on purpose: being on an event's staff is what
+  // lets somebody scan (docs/decisions.md), not their role.
   await pool.query(
     `INSERT INTO users (id, email, password_hash, name, role)
-     VALUES ($1, $2, $3, $4, $5), ($6, $7, $8, $9, $10)
+     VALUES ($1, $2, $4, $3, 'organizer'), ($5, $6, $4, $7, 'attendee'), ($8, $9, $4, $10, 'attendee')
      ON CONFLICT (id) DO UPDATE
-       SET email = EXCLUDED.email, name = EXCLUDED.name, role = EXCLUDED.role`,
+       SET email = EXCLUDED.email,
+           password_hash = EXCLUDED.password_hash,
+           name = EXCLUDED.name,
+           role = EXCLUDED.role`,
     [
       ORGANIZER_ID,
       'organizer@biletflow.kz',
-      PLACEHOLDER_HASH,
       'Aigerim S.',
-      'organizer',
+      passwordHash,
       ATTENDEE_ID,
       'attendee@biletflow.kz',
-      PLACEHOLDER_HASH,
       'Aidos K.',
-      'attendee',
+      DOOR_ID,
+      'door@biletflow.kz',
+      'Dana T.',
     ],
   );
 
@@ -132,8 +149,64 @@ async function seed(): Promise<void> {
     ],
   );
 
-  console.log('Seeded 2 users, 1 organizer profile, 2 published events, 3 ticket types.');
+  // The organizer puts Dana on the door of the tech meetup. No fixed id: the pair
+  // (event_id, user_id) is what makes an assignment unique, and it may already exist
+  // from somebody testing POST /api/events/:id/staff.
+  await pool.query(
+    `INSERT INTO event_staff (event_id, user_id, assigned_by)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (event_id, user_id) DO NOTHING`,
+    [EVENT_TECH_ID, DOOR_ID, ORGANIZER_ID],
+  );
+
+  // Aidos bought two Early Bird tickets, already paid, so there is something to scan
+  // before orders and payment exist. A paid order never expires, so expires_at is NULL.
+  await pool.query(
+    `INSERT INTO orders (id, user_id, event_id, status, subtotal, discount, total, expires_at)
+     VALUES ($1, $2, $3, 'paid', 1000000, 0, 1000000, NULL)
+     ON CONFLICT (id) DO UPDATE
+       SET status = EXCLUDED.status,
+           subtotal = EXCLUDED.subtotal,
+           discount = EXCLUDED.discount,
+           total = EXCLUDED.total,
+           expires_at = EXCLUDED.expires_at`,
+    [ORDER_ID, ATTENDEE_ID, EVENT_TECH_ID],
+  );
+
+  await pool.query(
+    `INSERT INTO order_items (id, order_id, ticket_type_id, name, quantity, unit_price)
+     VALUES ($1, $2, $3, 'Early Bird', 2, 500000)
+     ON CONFLICT (id) DO UPDATE
+       SET name = EXCLUDED.name, quantity = EXCLUDED.quantity, unit_price = EXCLUDED.unit_price`,
+    [ORDER_ITEM_ID, ORDER_ID, TT_TECH_EARLY_ID],
+  );
+
+  // Re-running the seed puts both tickets back to valid, so the door can be tested
+  // again from scratch after a round of check-ins.
+  await pool.query(
+    `INSERT INTO tickets (id, order_item_id, event_id, ticket_type_id, code, status, attendee_name)
+     VALUES ($1, $3, $4, $5, 'BF-7K2M-9XQP', 'valid', 'Aidos K.'),
+            ($2, $3, $4, $5, 'BF-4HTR-2WNA', 'valid', 'Aidos K.')
+     ON CONFLICT (id) DO UPDATE
+       SET code = EXCLUDED.code,
+           status = 'valid',
+           attendee_name = EXCLUDED.attendee_name,
+           checked_in_at = NULL,
+           checked_in_by = NULL`,
+    [TICKET_1_ID, TICKET_2_ID, ORDER_ITEM_ID, EVENT_TECH_ID, TT_TECH_EARLY_ID],
+  );
+
+  console.log(
+    'Seeded 3 users, 1 organizer profile, 2 published events, 3 ticket types,',
+    '1 staff assignment, 1 paid order with 2 tickets.',
+  );
+  console.log(`Log in as organizer@, attendee@ or door@biletflow.kz with "${DEV_PASSWORD}".`);
   console.log(`Try: GET /api/events/${EVENT_TECH_ID}`);
+  // Signed with JWT_SECRET from .env, so they scan only against a server using the same
+  // secret. Paste one into a QR generator to get a code the phone can read.
+  console.log('QR payloads for the two tickets:');
+  console.log(`  ${signTicketPayload(TICKET_1_ID)}`);
+  console.log(`  ${signTicketPayload(TICKET_2_ID)}`);
 }
 
 seed()

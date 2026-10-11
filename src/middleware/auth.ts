@@ -41,7 +41,8 @@ declare global {
 // in again.
 const TOKEN_EXPIRES_IN = '7d';
 
-function getSecret(): string {
+// Also the key for ticket QR signatures in src/lib/qr.ts.
+export function getSecret(): string {
   const secret = process.env.JWT_SECRET;
   if (!secret) {
     throw new AppError(ErrorCode.INTERNAL_ERROR, 'JWT_SECRET configuration is missing', 500);
