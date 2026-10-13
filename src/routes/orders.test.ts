@@ -76,6 +76,21 @@ const lockedEarly = {
 };
 const lockedStudent = { ...lockedEarly, id: TT_STUDENT_ID, name: 'Student', price: 0 };
 
+// What POST /api/orders reads about the event: paid sales on, unless a test says not.
+const activeEvent = [{ status: 'published', paid_sales_active: true }];
+const inactiveEvent = [{ status: 'published', paid_sales_active: false }];
+
+// No payment yet: the LEFT JOIN on payments found nothing.
+const noPayment = {
+  payment_amount: null,
+  payment_currency: null,
+  payment_method: null,
+  payment_is_demonstration: null,
+  payment_paid_at: null,
+};
+
+const PAID_AT = '2026-10-13T10:05:00.000Z';
+
 const orderRow = {
   id: ORDER_ID,
   status: 'pending',
@@ -86,6 +101,7 @@ const orderRow = {
   total: 1000000,
   created_at: CREATED_AT,
   expires_at: EXPIRES_AT,
+  ...noPayment,
 };
 const itemRows = [
   {
@@ -107,7 +123,7 @@ describe('POST /api/orders', () => {
 
   it('holds the seats as a pending order and answers 201 with the order', async () => {
     answer(
-      [{ status: 'published' }],
+      activeEvent,
       [lockedEarly],
       [{ id: TT_EARLY_ID, available: 10 }],
       [{ id: ORDER_ID }],
@@ -128,6 +144,7 @@ describe('POST /api/orders', () => {
       total: 1000000,
       created_at: CREATED_AT,
       expires_at: EXPIRES_AT,
+      payment: null,
       tickets: [],
     });
     // subtotal and total are computed from the locked prices: 2 x 500000.
@@ -138,6 +155,8 @@ describe('POST /api/orders', () => {
       statements().findIndex((s) => s.includes('AS available')),
     );
     expect(statements()).toContain('COMMIT');
+    // The hold is 15 minutes (docs/decisions.md).
+    expect(sqlOf(insert!)).toContain("interval '15 minutes'");
   });
 
   it('returns 401 without a token', async () => {
@@ -188,7 +207,7 @@ describe('POST /api/orders', () => {
 
   it('accepts exactly 10 tickets across types', async () => {
     answer(
-      [{ status: 'published' }],
+      activeEvent,
       [lockedEarly, lockedStudent],
       [
         { id: TT_EARLY_ID, available: 10 },
@@ -226,6 +245,35 @@ describe('POST /api/orders', () => {
     expect(statements()).toContain('ROLLBACK');
   });
 
+  it('returns 409 PAID_SALES_INACTIVE for a paid type before activation, and writes nothing', async () => {
+    answer(inactiveEvent, [lockedEarly]);
+
+    const res = await request(app).post('/api/orders').set('Authorization', bearer()).send(body);
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('PAID_SALES_INACTIVE');
+    expect(statements().some((s) => s.startsWith('INSERT'))).toBe(false);
+    expect(statements()).toContain('ROLLBACK');
+  });
+
+  it('still sells free types on an event whose paid sales are not active', async () => {
+    answer(
+      inactiveEvent,
+      [lockedStudent],
+      [{ id: TT_STUDENT_ID, available: 50 }],
+      [{ id: ORDER_ID }],
+      [],
+    );
+    answerLoadOrder({ ...orderRow, subtotal: 0, total: 0 });
+
+    const res = await request(app)
+      .post('/api/orders')
+      .set('Authorization', bearer())
+      .send({ event_id: EVENT_ID, items: [{ ticket_type_id: TT_STUDENT_ID, quantity: 1 }] });
+
+    expect(res.status).toBe(201);
+  });
+
   it('returns 409 CONFLICT for a cancelled event', async () => {
     answer([{ status: 'cancelled' }]);
 
@@ -240,7 +288,7 @@ describe('POST /api/orders', () => {
     ['belongs to another event', [{ ...lockedEarly, event_id: OTHER_EVENT_ID }]],
     ['is hidden', [{ ...lockedEarly, is_hidden: true }]],
   ])('returns 400 when the ticket type %s', async (_label, typeRows) => {
-    answer([{ status: 'published' }], typeRows);
+    answer(activeEvent, typeRows);
 
     const res = await request(app).post('/api/orders').set('Authorization', bearer()).send(body);
 
@@ -249,7 +297,7 @@ describe('POST /api/orders', () => {
   });
 
   it('returns 409 SALES_CLOSED outside the sales window', async () => {
-    answer([{ status: 'published' }], [{ ...lockedEarly, on_sale: false }]);
+    answer(activeEvent, [{ ...lockedEarly, on_sale: false }]);
 
     const res = await request(app).post('/api/orders').set('Authorization', bearer()).send(body);
 
@@ -261,7 +309,7 @@ describe('POST /api/orders', () => {
     [0, '"Early Bird" is sold out'],
     [1, 'Only 1 "Early Bird" ticket is left'],
   ])('returns 409 TICKET_SOLD_OUT with %i left and writes nothing', async (available, message) => {
-    answer([{ status: 'published' }], [lockedEarly], [{ id: TT_EARLY_ID, available }]);
+    answer(activeEvent, [lockedEarly], [{ id: TT_EARLY_ID, available }]);
 
     const res = await request(app).post('/api/orders').set('Authorization', bearer()).send(body);
 
@@ -275,22 +323,43 @@ describe('POST /api/orders', () => {
 describe('POST /api/orders/:id/pay', () => {
   const pay = () => request(app).post(`/api/orders/${ORDER_ID}/pay`).set('Authorization', bearer());
 
-  it('marks the order paid and issues one ticket per seat', async () => {
+  const paidOrderRow = {
+    ...orderRow,
+    status: 'paid',
+    expires_at: null as never,
+    payment_amount: 1000000,
+    payment_currency: 'KZT',
+    payment_method: 'simulated',
+    payment_is_demonstration: true,
+    payment_paid_at: PAID_AT,
+  };
+
+  it('marks the order paid, records a demonstration payment and issues one ticket per seat', async () => {
     answer(
-      [{ status: 'pending', event_id: EVENT_ID }],
+      [{ status: 'pending', event_id: EVENT_ID, total: 1000000 }],
       [{ id: 'item', ticket_type_id: TT_EARLY_ID, quantity: 2 }],
       [],
       [{ expired: false }],
       [],
+      [],
       [{ name: 'Aidos K.' }],
       [],
     );
-    answerLoadOrder({ ...orderRow, status: 'paid', expires_at: null as never });
+    answerLoadOrder(paidOrderRow as never);
 
     const res = await pay();
 
     expect(res.status).toBe(200);
     expect(res.body.order.status).toBe('paid');
+    expect(res.body.order.payment).toEqual({
+      method: 'simulated',
+      is_demonstration: true,
+      amount: 1000000,
+      currency: 'KZT',
+      paid_at: PAID_AT,
+    });
+    const payment = query.mock.calls.find((call) => sqlOf(call).startsWith('INSERT INTO payments'));
+    expect(payment?.[1]).toEqual([ORDER_ID, BUYER_ID, 1000000]);
     const insert = query.mock.calls.find((call) => sqlOf(call).startsWith('INSERT INTO tickets'));
     const [eventId, name, itemIds, typeIds, codes] = insert![1] as unknown[];
     expect([eventId, name]).toEqual([EVENT_ID, 'Aidos K.']);
@@ -300,6 +369,25 @@ describe('POST /api/orders/:id/pay', () => {
     for (const code of codes as string[]) {
       expect(code).toMatch(/^BF-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/);
     }
+  });
+
+  it('records no payment for a free order', async () => {
+    answer(
+      [{ status: 'pending', event_id: EVENT_ID, total: 0 }],
+      [{ id: 'item', ticket_type_id: TT_STUDENT_ID, quantity: 1 }],
+      [],
+      [{ expired: false }],
+      [],
+      [{ name: 'Aidos K.' }],
+      [],
+    );
+    answerLoadOrder({ ...orderRow, status: 'paid', subtotal: 0, total: 0 });
+
+    const res = await pay();
+
+    expect(res.status).toBe(200);
+    expect(res.body.order.payment).toBeNull();
+    expect(statements().some((s) => s.startsWith('INSERT INTO payments'))).toBe(false);
   });
 
   it("returns 404 ORDER_NOT_FOUND for somebody else's order", async () => {
@@ -328,7 +416,7 @@ describe('POST /api/orders/:id/pay', () => {
 
   it('returns 409 ORDER_EXPIRED and issues nothing after the hold ran out', async () => {
     answer(
-      [{ status: 'pending', event_id: EVENT_ID }],
+      [{ status: 'pending', event_id: EVENT_ID, total: 1000000 }],
       [{ id: 'item', ticket_type_id: TT_EARLY_ID, quantity: 2 }],
       [],
       [{ expired: true }],
@@ -339,6 +427,7 @@ describe('POST /api/orders/:id/pay', () => {
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('ORDER_EXPIRED');
     expect(statements().some((s) => s.startsWith('INSERT INTO tickets'))).toBe(false);
+    expect(statements().some((s) => s.startsWith('INSERT INTO payments'))).toBe(false);
     expect(statements()).toContain('ROLLBACK');
   });
 });

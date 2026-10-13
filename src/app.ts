@@ -13,6 +13,7 @@ import { authRouter } from './routes/auth';
 import { eventsRouter } from './routes/events';
 import { meRouter } from './routes/me';
 import { ordersRouter } from './routes/orders';
+import { paidSalesRouter } from './routes/paid-sales';
 import { staffRouter } from './routes/staff';
 import { ticketTypesRouter } from './routes/ticket-types';
 import { ticketsRouter } from './routes/tickets';
@@ -35,6 +36,7 @@ export function createApp() {
   app.use('/api/tickets', ticketsRouter);
   app.use('/api', ticketTypesRouter);
   app.use('/api', staffRouter);
+  app.use('/api', paidSalesRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

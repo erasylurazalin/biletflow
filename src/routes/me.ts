@@ -22,7 +22,8 @@ const PG_UNIQUE_VIOLATION = '23505';
 const PG_FOREIGN_KEY_VIOLATION = '23503';
 
 const PROFILE_COLUMNS = `p.user_id, p.display_name, p.contact_email, p.contact_phone,
-  p.payout_bank_name, p.payout_iban, p.payout_account_holder, p.created_at, p.updated_at`;
+  p.payout_bank_name, p.payout_iban, p.payout_account_holder, p.identity_verified_at,
+  p.created_at, p.updated_at`;
 
 interface ProfileRow {
   user_id: string;
@@ -32,6 +33,7 @@ interface ProfileRow {
   payout_bank_name: string | null;
   payout_iban: string | null;
   payout_account_holder: string | null;
+  identity_verified_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -59,6 +61,7 @@ function toProfile(row: ProfileRow) {
             iban: row.payout_iban,
             account_holder: row.payout_account_holder,
           },
+    identity_verified_at: row.identity_verified_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -281,6 +284,33 @@ meRouter.patch('/organizer-profile', requireAuth, async (req, res, next) => {
     const row = result.rows[0];
     if (!row) {
       // Deleted between the read and the update.
+      throw notFound();
+    }
+
+    res.json({ organizer_profile: toProfile(row) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/me/organizer-profile/verify-identity  - simulated identity check
+// ---------------------------------------------------------------------------
+
+// SRS 3.2 step 2 for paid sales. The academic MVP simulates it (SRS 3.2 allows that), so
+// it takes nothing, stores no document numbers and always succeeds. It records when the
+// step was done, once: COALESCE keeps the first time on a repeat call.
+meRouter.post('/organizer-profile/verify-identity', requireAuth, async (req, res, next) => {
+  try {
+    const result = await pool.query<ProfileRow>(
+      `UPDATE organizer_profiles p
+          SET identity_verified_at = COALESCE(p.identity_verified_at, now())
+        WHERE p.user_id = $1
+       RETURNING ${PROFILE_COLUMNS}`,
+      [req.user!.id],
+    );
+    const row = result.rows[0];
+    if (!row) {
       throw notFound();
     }
 

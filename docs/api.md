@@ -73,6 +73,7 @@ POST  /api/me/organizer-profile   { display_name, contact_email?, contact_phone?
                                   -> { organizer_profile, user, token }
 GET   /api/me/organizer-profile   -> { organizer_profile }
 PATCH /api/me/organizer-profile   { any of the POST fields } -> { organizer_profile }
+POST  /api/me/organizer-profile/verify-identity   { } -> { organizer_profile }
 ```
 
 ```json
@@ -86,12 +87,13 @@ PATCH /api/me/organizer-profile   { any of the POST fields } -> { organizer_prof
     "iban": "KZ000000000000000000",
     "account_holder": "Aidos K."
   },
+  "identity_verified_at": "..." | null,   // simulated, see below
   "created_at": "...",
   "updated_at": "..."
 }
 ```
 
-All three need a token, and all three work on the caller's own profile only.
+All four need a token, and all four work on the caller's own profile only.
 
 - `POST` creates the profile and switches the caller's role to `organizer`. A
   `platform_admin` keeps their role. It answers `201` with the updated `user` and a new
@@ -104,7 +106,12 @@ All three need a token, and all three work on the caller's own profile only.
   simulated in the academic MVP, so the IBAN shape is checked but nothing is ever paid.
 - `PATCH` changes only the fields sent. `null` clears `contact_email`, `contact_phone`
   or `payout`, but the profile must keep at least one contact (`400` otherwise).
-- `GET` or `PATCH` without a profile is `404 ORGANIZER_PROFILE_NOT_FOUND`.
+- `verify-identity` is a **simulated identity check** (SRS 3.2 step 2): it takes nothing,
+  stores no document numbers and always succeeds. It sets `identity_verified_at` once;
+  calling it again changes nothing and answers `200`. It is one of the steps of paid
+  sales activation (below).
+- `GET`, `PATCH` or `verify-identity` without a profile is
+  `404 ORGANIZER_PROFILE_NOT_FOUND`.
 
 ---
 
@@ -130,11 +137,15 @@ POST   /api/events/:id/publish        draft -> published
   "status": "draft" | "published" | "cancelled",
   "cover_image_url": "https://...",
   "organizer": { "id": "uuid", "name": "..." },
+  "paid_sales_active": false,
   "ticket_types": [ ... ]
 }
 ```
 
-The list endpoint returns events **without** `ticket_types` and with a shortened
+`paid_sales_active` says whether ticket types with a price above `0` can be bought
+(see "Paid sales activation"). When it is `false`, show paid types as not on sale yet.
+
+The list endpoint returns events **without** `ticket_types` and `paid_sales_active`, and with a shortened
 description. Detail returns everything. Frontend should not assume list items are
 complete.
 
@@ -196,7 +207,7 @@ door staff go to other people's events too.
 POST /api/orders          { event_id, items: [{ ticket_type_id, quantity }] }
                           -> { order }   // status: "pending"
 
-POST /api/orders/:id/pay  { }            // fake payment for now
+POST /api/orders/:id/pay  { }            // simulated payment
                           -> { order }   // status: "paid", tickets issued
 
 GET  /api/orders                         // my orders
@@ -215,16 +226,31 @@ GET  /api/orders/:id
   "discount": 0,
   "total": 1000000,
   "created_at": "...",
-  "expires_at": "...",     // pending orders die after ~10 min
+  "expires_at": "...",     // pending orders die after 15 min; null once paid
+  "payment": { ... } | null, // null until paid, and for free orders
   "tickets": [ ... ]        // empty until paid
 }
 ```
 
+```json
+"payment": {
+  "method": "simulated",
+  "is_demonstration": true,
+  "amount": 1000000,
+  "currency": "KZT",
+  "paid_at": "..."
+}
+```
+
+**Every payment is demonstration data** (SRS 4.6). No money moves. `is_demonstration`
+is always `true` in the academic MVP, and clients must show it, for example as a
+"Demo payment" badge, and never present the payment as a real transaction.
+
 Inventory is held when the order is created, released when it expires.
 `POST /orders` returns `409 TICKET_SOLD_OUT` if there isn't enough left.
 
-Free tickets go through the same flow — `total` is just `0` and `/pay` succeeds
-immediately. One code path, not two.
+Free tickets go through the same flow: `total` is just `0` and `/pay` succeeds
+immediately, with no `payment` record. One code path, not two.
 
 ### Creating an order
 
@@ -244,17 +270,20 @@ All four need a token.
 - `name` and `unit_price` are copied from the ticket type into the order, so a later
   price change does not touch it. `subtotal` is the sum of the items, `discount` is
   `0` until promo codes exist, and `total` is `subtotal - discount`.
-- `expires_at` is 10 minutes after `created_at`. A pending order past that time holds
-  no inventory and reads as `cancelled`.
-- Paid sales activation (SRS 4.5) is not built yet. Until it is, paid ticket types can
-  be ordered and `/pay` is a labelled simulation.
+- `expires_at` is 15 minutes after `created_at` (the SRS gives no time; this is our
+  default, `docs/decisions.md`). A pending order past that time holds no inventory and
+  reads as `cancelled`.
+- A ticket type with a price above `0` can only be ordered once the event's paid sales
+  are active (SRS 4.5). Before that it is `409 PAID_SALES_INACTIVE`. Free types on the
+  same event can always be ordered.
 
 ### Paying and reading orders
 
 - Orders belong to the buyer. Somebody else's order is `404 ORDER_NOT_FOUND`, not
   `403`, so ids of other people's orders cannot be probed.
 - `/pay` on a pending order marks it `paid` and issues one ticket per admission: an
-  item with `quantity: 2` gives two tickets. The order comes back with its `tickets`.
+  item with `quantity: 2` gives two tickets. The order comes back with its `tickets`
+  and, when `total` is above `0`, its simulated `payment`. It takes no card details.
   On an expired order it is `409 ORDER_EXPIRED`. On a paid or cancelled order it is
   `409 CONFLICT`.
 - Each ticket's `attendee_name` is the buyer's account name for now. SRS 4.6 wants
@@ -263,6 +292,60 @@ All four need a token.
 - `GET /api/orders` ("my orders") uses the list envelope: `{ orders, limit, offset }`,
   newest first, every status. List items leave out `tickets`; `GET /api/orders/:id`
   has them.
+
+---
+
+## Paid sales activation (organizer)
+
+Free tickets need nothing. Selling paid tickets on an event needs paid sales activated
+for that event first (SRS 3.2, 4.5, UC2). The organizer works through a checklist and
+then activates. Activation applies to that one event only.
+
+```
+GET  /api/events/:id/paid-sales                  -> { paid_sales }
+POST /api/events/:id/paid-sales/activation-fee   { }                  -> { paid_sales }
+POST /api/events/:id/paid-sales/terms            { accepted: true }   -> { paid_sales }
+POST /api/events/:id/paid-sales/activate         { }                  -> { paid_sales }
+```
+
+```json
+"paid_sales": {
+  "event_id": "uuid",
+  "status": "inactive" | "active",
+  "checklist": {
+    "paid_ticket_type": true,       // the event has a ticket type with a price above 0
+    "identity_verified": true,      // POST /api/me/organizer-profile/verify-identity
+    "payout_account": true,         // payout set on the organizer profile
+    "activation_fee_paid": false,   // POST .../activation-fee
+    "terms_accepted": false         // POST .../terms
+  },
+  "activation_fee": {
+    "amount": 500000,               // 5,000 KZT
+    "currency": "KZT",
+    "payment": { ... } | null       // the "payment" object from Orders
+  },
+  "terms_accepted_at": "..." | null,
+  "activated_at": "..." | null
+}
+```
+
+All four need a token and are for the event's organizer only: anyone else gets
+`403 FORBIDDEN`, and a missing event is `404 EVENT_NOT_FOUND`. On a cancelled event the
+three `POST`s are `409 CONFLICT`.
+
+- Identity and the payout account belong to the organizer, so they are done once on the
+  organizer profile and count for every event. The fee and the terms are per event.
+- `activation-fee` records a **simulated payment** of the fee. The amount is 5,000 KZT
+  (SRS 3.3 leaves it open; `docs/decisions.md`). Paying it a second time is
+  `409 CONFLICT`.
+- `terms` needs `{ "accepted": true }`, anything else is `400`. Accepting again changes
+  nothing.
+- `activate` checks the whole checklist at that moment. Anything missing is
+  `409 PAID_SALES_INCOMPLETE`, and the message names what is missing. Activating an
+  event that is already active changes nothing and answers `200`.
+- The steps can be done in any order, on a draft or a published event.
+- Activation is not undone by later edits, for example removing the payout account.
+  Suspending paid sales (SRS 4.5, platform admins) is not specified yet.
 
 ---
 

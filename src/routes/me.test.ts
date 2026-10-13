@@ -26,6 +26,7 @@ const profileRow = {
   payout_bank_name: 'Demo Bank',
   payout_iban: 'KZ000000000000000000',
   payout_account_holder: 'Aidos K.',
+  identity_verified_at: null,
   created_at: new Date(CREATED_AT),
   updated_at: new Date(CREATED_AT),
 };
@@ -36,6 +37,7 @@ const profile = {
   contact_email: 'hello@astanatech.kz',
   contact_phone: '+77011234567',
   payout: { bank_name: 'Demo Bank', iban: 'KZ000000000000000000', account_holder: 'Aidos K.' },
+  identity_verified_at: null,
   created_at: CREATED_AT,
   updated_at: CREATED_AT,
 };
@@ -285,5 +287,43 @@ describe('PATCH /api/me/organizer-profile', () => {
 
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe('ORGANIZER_PROFILE_NOT_FOUND');
+  });
+});
+
+describe('POST /api/me/organizer-profile/verify-identity', () => {
+  it('records the simulated identity check and returns the profile', async () => {
+    const VERIFIED_AT = '2026-10-13T12:00:00.000Z';
+    query.mockResolvedValueOnce(
+      rows([{ ...profileRow, identity_verified_at: new Date(VERIFIED_AT) }]),
+    );
+
+    const res = await request(app)
+      .post('/api/me/organizer-profile/verify-identity')
+      .set('Authorization', bearer('organizer'));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      organizer_profile: { ...profile, identity_verified_at: VERIFIED_AT },
+    });
+    // A repeat call keeps the first time.
+    expect(String(query.mock.calls[0]?.[0])).toContain('COALESCE(p.identity_verified_at, now())');
+  });
+
+  it('returns 404 ORGANIZER_PROFILE_NOT_FOUND without a profile', async () => {
+    query.mockResolvedValueOnce(rows([]));
+
+    const res = await request(app)
+      .post('/api/me/organizer-profile/verify-identity')
+      .set('Authorization', bearer());
+
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('ORGANIZER_PROFILE_NOT_FOUND');
+  });
+
+  it('returns 401 without a token', async () => {
+    const res = await request(app).post('/api/me/organizer-profile/verify-identity');
+
+    expect(res.status).toBe(401);
+    expect(query).not.toHaveBeenCalled();
   });
 });

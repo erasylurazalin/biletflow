@@ -1,11 +1,14 @@
 /**
  * Orders: buy tickets, pay for them, read my orders. Same layering as routes/events.ts.
  *
- * Two steps, as docs/api.md asks. POST /api/orders holds the seats for 10 minutes as a
+ * Two steps, as docs/api.md asks. POST /api/orders holds the seats for 15 minutes as a
  * pending order. POST /api/orders/:id/pay marks it paid and issues one ticket per seat.
- * A free order goes through the same two steps with a total of 0. Paid sales activation
- * (SRS 4.5) is not built yet, so for now /pay is a simulation: it takes no payment
- * details and always succeeds on a pending order.
+ * A free order goes through the same two steps with a total of 0.
+ *
+ * Payment is simulated (SRS 3.2, 4.6): /pay takes no card details and always succeeds on
+ * a pending order. When the total is above 0 it records a demonstration payment, which
+ * the order shows as `payment` (src/lib/payments.ts). Paid ticket types can only be
+ * ordered once the event's paid sales are active (routes/paid-sales.ts).
  *
  * Inventory is never stored (migration 001). Seats are "held" by paid orders and by
  * pending orders that have not expired (HELD_SQL), so an expired order gives its seats
@@ -27,6 +30,7 @@ import { z } from 'zod';
 import { pool } from '../db/pool';
 import { withTransaction } from '../db/transaction';
 import { AppError, ErrorCode } from '../lib/errors';
+import { PAYMENT_COLUMNS, toPayment, type PaymentColumns } from '../lib/payments';
 import { requireAuth } from '../middleware/auth';
 import { HELD_SQL } from './ticket-types';
 import { TICKET_SELECT, toTicket, type TicketRow } from './tickets';
@@ -35,6 +39,10 @@ export const ordersRouter = Router();
 
 // SRS 4.3 asks for a per-order limit. 10 is our default until organizers can set one.
 const MAX_TICKETS_PER_ORDER = 10;
+
+// How long a pending order holds its seats. The SRS gives no time; 15 minutes is our
+// default (docs/decisions.md). Constant, so safe to put into the SQL with ${}.
+const HOLD_MINUTES = 15;
 
 // Postgres error code for a foreign key violation: the user behind the token is gone.
 const PG_FOREIGN_KEY_VIOLATION = '23503';
@@ -53,11 +61,13 @@ const ORDER_SELECT = `SELECT o.id,
          o.discount,
          o.total,
          o.created_at,
-         o.expires_at
+         o.expires_at,
+         ${PAYMENT_COLUMNS}
     FROM orders o
-    JOIN events e ON e.id = o.event_id`;
+    JOIN events e ON e.id = o.event_id
+    LEFT JOIN payments pay ON pay.order_id = o.id`;
 
-interface OrderRow {
+interface OrderRow extends PaymentColumns {
   id: string;
   status: string;
   event_id: string;
@@ -96,6 +106,7 @@ function toOrder(row: OrderRow, items: OrderItemRow[], tickets?: TicketRow[]) {
     total: row.total,
     created_at: row.created_at,
     expires_at: row.expires_at,
+    payment: toPayment(row),
     ...(tickets && { tickets: tickets.map(toTicket) }),
   };
 }
@@ -174,7 +185,7 @@ function ticketCode(): string {
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/orders  - hold seats for 10 minutes
+// POST /api/orders  - hold seats for 15 minutes
 // ---------------------------------------------------------------------------
 
 const createSchema = z
@@ -217,8 +228,14 @@ ordersRouter.post('/', requireAuth, async (req, res, next) => {
     const ticketTypeIds = items.map((item) => item.ticket_type_id);
 
     const orderId = await withTransaction(async (client) => {
-      const eventResult = await client.query<{ status: string }>(
-        `SELECT status FROM events WHERE id = $1`,
+      const eventResult = await client.query<{ status: string; paid_sales_active: boolean }>(
+        `SELECT e.status,
+                EXISTS (SELECT 1
+                          FROM paid_sales_activations psa
+                         WHERE psa.event_id = e.id
+                           AND psa.activated_at IS NOT NULL) AS paid_sales_active
+           FROM events e
+          WHERE e.id = $1`,
         [eventId],
       );
       const event = eventResult.rows[0];
@@ -260,6 +277,17 @@ ordersRouter.post('/', requireAuth, async (req, res, next) => {
         if (!type || type.event_id !== eventId || type.is_hidden) {
           throw AppError.badRequest(
             `Ticket type ${item.ticket_type_id} is not on sale for this event`,
+          );
+        }
+      }
+      // SRS 4.5: paid tickets cannot be bought before activation. Free types on the same
+      // event can, so the check is per ticket type, not per event.
+      for (const item of items) {
+        const type = types.get(item.ticket_type_id)!;
+        if (type.price > 0 && !event.paid_sales_active) {
+          throw AppError.conflict(
+            ErrorCode.PAID_SALES_INACTIVE,
+            `"${type.name}" tickets cannot be bought yet: the organizer has not activated paid sales`,
           );
         }
       }
@@ -309,7 +337,7 @@ ordersRouter.post('/', requireAuth, async (req, res, next) => {
         // requireAuth guarantees req.user.
         orderResult = await client.query<{ id: string }>(
           `INSERT INTO orders (user_id, event_id, status, subtotal, discount, total, expires_at)
-           VALUES ($1, $2, 'pending', $3, 0, $3, now() + interval '10 minutes')
+           VALUES ($1, $2, 'pending', $3, 0, $3, now() + interval '${HOLD_MINUTES} minutes')
            RETURNING id`,
           [req.user!.id, eventId, subtotal],
         );
@@ -385,8 +413,8 @@ ordersRouter.post('/:id/pay', requireAuth, async (req, res, next) => {
     await withTransaction(async (client) => {
       // Locking the order makes a double click on "Pay" issue tickets once: the second
       // request waits here, then finds the order already paid.
-      const orderResult = await client.query<{ status: string; event_id: string }>(
-        `SELECT status, event_id FROM orders WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+      const orderResult = await client.query<{ status: string; event_id: string; total: number }>(
+        `SELECT status, event_id, total FROM orders WHERE id = $1 AND user_id = $2 FOR UPDATE`,
         [orderId, userId],
       );
       const order = orderResult.rows[0];
@@ -427,6 +455,15 @@ ordersRouter.post('/:id/pay', requireAuth, async (req, res, next) => {
       await client.query(`UPDATE orders SET status = 'paid', expires_at = NULL WHERE id = $1`, [
         orderId,
       ]);
+
+      // The simulated payment. A free order has nothing to pay, so it gets no record.
+      if (order.total > 0) {
+        await client.query(
+          `INSERT INTO payments (purpose, order_id, paid_by, amount, method)
+           VALUES ('order', $1, $2, $3, 'simulated')`,
+          [orderId, userId, order.total],
+        );
+      }
 
       // SRS 4.6 wants attendee details at checkout. Until the request body has them,
       // every ticket carries the buyer's account name (docs/api.md).
