@@ -28,8 +28,9 @@ const PG_INT_MAX = 2_147_483_647;
 
 // Seats held by orders for the ticket type aliased `tt`: paid ones for good, pending ones
 // until they expire. Same rule as the availability query in routes/events.ts. This is a
-// constant, never user input, so putting it into the SQL with ${} is safe.
-const HELD_SQL = `COALESCE((
+// constant, never user input, so putting it into the SQL with ${} is safe. routes/orders.ts
+// uses it too, to decide whether an order still fits.
+export const HELD_SQL = `COALESCE((
     SELECT SUM(oi.quantity)
       FROM order_items oi
       JOIN orders o ON o.id = oi.order_id
