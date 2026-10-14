@@ -268,7 +268,7 @@ eventsRouter.post('/', requireAuth, async (req, res, next) => {
     const { title, description, venue_name, venue_address, starts_at, ends_at, cover_image_url } =
       parsed.data;
 
-    // New events always start as drafts — status is not something the client gets to
+    // New events always start as drafts. Status is not something the client gets to
     // set on creation. Publishing is a separate endpoint (POST /:id/publish).
     const result = await pool.query<EventDetailRow>(
       `WITH inserted AS (
@@ -380,7 +380,7 @@ eventsRouter.patch('/:id', requireAuth, async (req, res, next) => {
       throw AppError.badRequest('Invalid field "ends_at": ends_at must be after starts_at');
     }
     // Keys come from the parsed Zod object, never straight from req.body, so this is
-    // building SQL from a fixed, known field set — not from arbitrary user input.
+    // building SQL from a fixed, known field set, not from arbitrary user input.
     const fields = Object.entries(bodyParsed.data).filter(([, value]) => value !== undefined);
     const setClause = fields.map(([key], i) => `${key} = $${i + 1}`).join(', ');
     const values = fields.map(([, value]) => value);
@@ -397,7 +397,7 @@ eventsRouter.patch('/:id', requireAuth, async (req, res, next) => {
     );
     const event = updateResult.rows[0];
     if (!event) {
-      throw new AppError(ErrorCode.INTERNAL_ERROR, 'Failed to create event', 500);
+      throw new AppError(ErrorCode.INTERNAL_ERROR, 'Failed to update event', 500);
     }
     res.json({
       event: {
