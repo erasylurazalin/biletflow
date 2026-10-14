@@ -262,9 +262,7 @@ eventsRouter.post('/', requireAuth, async (req, res, next) => {
     if (!parsed.success) {
       const first = parsed.error.issues[0];
       throw AppError.badRequest(
-        first
-          ? `Invalid field "${first.path.join('.')}": ${first.message}`
-          : 'Invalid event data',
+        first ? `Invalid field "${first.path.join('.')}": ${first.message}` : 'Invalid event data',
       );
     }
     const { title, description, venue_name, venue_address, starts_at, ends_at, cover_image_url } =
@@ -283,7 +281,16 @@ eventsRouter.post('/', requireAuth, async (req, res, next) => {
        SELECT inserted.*, u.name AS organizer_name
          FROM inserted
          JOIN users u ON u.id = inserted.organizer_id`,
-      [title, description, venue_name, venue_address, starts_at, ends_at, cover_image_url ?? null, req.user!.id],
+      [
+        title,
+        description,
+        venue_name,
+        venue_address,
+        starts_at,
+        ends_at,
+        cover_image_url ?? null,
+        req.user!.id,
+      ],
     );
     const event = result.rows[0];
     if (!event) {
@@ -342,16 +349,19 @@ eventsRouter.patch('/:id', requireAuth, async (req, res, next) => {
     if (!bodyParsed.success) {
       const first = bodyParsed.error.issues[0];
       throw AppError.badRequest(
-        first
-          ? `Invalid field "${first.path.join('.')}": ${first.message}`
-          : 'Invalid event data',
+        first ? `Invalid field "${first.path.join('.')}": ${first.message}` : 'Invalid event data',
       );
     }
 
     // Ownership is checked against the database, not the JWT: role alone doesn't say
     // whose event this is. This also gets us organizer_name for the response for free.
-    const ownerResult = await pool.query<{ organizer_id: string; organizer_name: string }>(
-      `SELECT e.organizer_id, u.name AS organizer_name
+    const ownerResult = await pool.query<{
+      organizer_id: string;
+      organizer_name: string;
+      starts_at: Date;
+      ends_at: Date;
+    }>(
+      `SELECT e.organizer_id, u.name AS organizer_name, e.starts_at, e.ends_at
          FROM events e
          JOIN users u ON u.id = e.organizer_id
         WHERE e.id = $1`,
@@ -364,7 +374,11 @@ eventsRouter.patch('/:id', requireAuth, async (req, res, next) => {
     if (owner.organizer_id !== req.user!.id) {
       throw AppError.forbidden('You can only edit your own events');
     }
-
+    const mergedStartsAt = bodyParsed.data.starts_at ?? owner.starts_at;
+    const mergedEndsAt = bodyParsed.data.ends_at ?? owner.ends_at;
+    if (mergedEndsAt <= mergedStartsAt) {
+      throw AppError.badRequest('Invalid field "ends_at": ends_at must be after starts_at');
+    }
     // Keys come from the parsed Zod object, never straight from req.body, so this is
     // building SQL from a fixed, known field set — not from arbitrary user input.
     const fields = Object.entries(bodyParsed.data).filter(([, value]) => value !== undefined);
