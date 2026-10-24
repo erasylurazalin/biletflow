@@ -261,7 +261,7 @@ Buying needs a logged-in user of any role, not the `attendee` role: organizers a
 door staff go to other people's events too.
 
 ```
-POST /api/orders          { event_id, items: [{ ticket_type_id, quantity }] }
+POST /api/orders          { event_id, items: [{ ticket_type_id, quantity, attendee_names? }] }
                           -> { order }   // status: "pending"
 
 POST /api/orders/:id/pay  { }            // simulated payment
@@ -281,7 +281,8 @@ GET  /api/orders/:id
   ],
   "subtotal": 1000000,
   "discount": 0,
-  "total": 1000000,
+  "processing_fee": 30000,
+  "total": 1030000,
   "created_at": "...",
   "expires_at": "...",     // pending orders die after 15 min; null once paid
   "payment": { ... } | null, // null until paid, and for free orders
@@ -293,7 +294,7 @@ GET  /api/orders/:id
 "payment": {
   "method": "simulated",
   "is_demonstration": true,
-  "amount": 1000000,
+  "amount": 1030000,
   "currency": "KZT",
   "paid_at": "..."
 }
@@ -317,6 +318,9 @@ All four need a token.
   a whole number from 1 to 10, and the whole order is at most 10 tickets (SRS 4.3 asks
   for a per-order limit; a limit the organizer sets comes later). Anything else is
   `400 VALIDATION_ERROR`.
+- An item may include `attendee_names`, with exactly one name per ticket in its
+  `quantity`. Each name is trimmed and must be 1 to 100 characters. A missing list is
+  allowed; a list of the wrong length is `400 VALIDATION_ERROR`.
 - The event must be published. A draft or a missing event is `404 EVENT_NOT_FOUND`,
   the same as the public detail. A cancelled event is `409 CONFLICT`.
 - Every ticket type must belong to that event and must not be hidden, otherwise
@@ -326,7 +330,9 @@ All four need a token.
   `409 SALES_CLOSED`. Not enough left is `409 TICKET_SOLD_OUT`.
 - `name` and `unit_price` are copied from the ticket type into the order, so a later
   price change does not touch it. `subtotal` is the sum of the items, `discount` is
-  `0` until promo codes exist, and `total` is `subtotal - discount`.
+  `0` until promo codes exist, and `processing_fee` is 3% of `subtotal - discount`,
+  rounded to the nearest tiyn. `total` is `subtotal - discount + processing_fee`, so
+  the fee and total are both `0` for a free order. The simulated payment uses `total`.
 - `expires_at` is 15 minutes after `created_at` (the SRS gives no time; this is our
   default, `docs/decisions.md`). A pending order past that time holds no inventory and
   reads as `cancelled`.
@@ -343,9 +349,12 @@ All four need a token.
   and, when `total` is above `0`, its simulated `payment`. It takes no card details.
   On an expired order it is `409 ORDER_EXPIRED`. On a paid or cancelled order it is
   `409 CONFLICT`.
-- Each ticket's `attendee_name` is the buyer's account name for now. SRS 4.6 wants
-  attendee details at checkout; per-ticket names are a later addition to the request
-  body.
+- Each ticket takes its `attendee_name` from the item's `attendee_names`, in seat order.
+  Without that list, it uses the buyer's account name.
+- Successful payment writes an `order.paid` audit entry and sends the buyer an
+  `order_confirmation` email. It lists every ticket code, type and attendee name, and
+  links to `/tickets` for the QR codes. A paid order also states the simulated total and
+  that no real money was charged.
 - `GET /api/orders` ("my orders") uses the list envelope: `{ orders, limit, offset }`,
   newest first, every status. List items leave out `tickets`; `GET /api/orders/:id`
   has them.

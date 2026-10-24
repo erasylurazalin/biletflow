@@ -98,7 +98,8 @@ const orderRow = {
   event_title: 'Astana Tech Meetup',
   subtotal: 1000000,
   discount: 0,
-  total: 1000000,
+  processing_fee: 30000,
+  total: 1030000,
   created_at: CREATED_AT,
   expires_at: EXPIRES_AT,
   ...noPayment,
@@ -141,15 +142,16 @@ describe('POST /api/orders', () => {
       items: [{ ticket_type_id: TT_EARLY_ID, name: 'Early Bird', quantity: 2, unit_price: 500000 }],
       subtotal: 1000000,
       discount: 0,
-      total: 1000000,
+      processing_fee: 30000,
+      total: 1030000,
       created_at: CREATED_AT,
       expires_at: EXPIRES_AT,
       payment: null,
       tickets: [],
     });
-    // subtotal and total are computed from the locked prices: 2 x 500000.
+    // Prices come from the locked rows: subtotal 2 x 500000, plus a 3% fee.
     const insert = query.mock.calls.find((call) => sqlOf(call).startsWith('INSERT INTO orders'));
-    expect(insert?.[1]).toEqual([BUYER_ID, EVENT_ID, 1000000]);
+    expect(insert?.[1]).toEqual([BUYER_ID, EVENT_ID, 1000000, 0, 30000, 1030000]);
     // The ticket types are locked before anything is counted.
     expect(statements().findIndex((s) => s.includes('FOR UPDATE'))).toBeLessThan(
       statements().findIndex((s) => s.includes('AS available')),
@@ -194,6 +196,13 @@ describe('POST /api/orders', () => {
           { ticket_type_id: TT_EARLY_ID, quantity: 1 },
           { ticket_type_id: TT_EARLY_ID, quantity: 1 },
         ],
+      },
+    ],
+    [
+      'attendee names that do not match the quantity',
+      {
+        event_id: EVENT_ID,
+        items: [{ ticket_type_id: TT_EARLY_ID, quantity: 2, attendee_names: ['Aru'] }],
       },
     ],
     ['an event id that is not a UUID', { ...body, event_id: 'banana' }],
@@ -264,7 +273,7 @@ describe('POST /api/orders', () => {
       [{ id: ORDER_ID }],
       [],
     );
-    answerLoadOrder({ ...orderRow, subtotal: 0, total: 0 });
+    answerLoadOrder({ ...orderRow, subtotal: 0, processing_fee: 0, total: 0 });
 
     const res = await request(app)
       .post('/api/orders')
@@ -272,6 +281,9 @@ describe('POST /api/orders', () => {
       .send({ event_id: EVENT_ID, items: [{ ticket_type_id: TT_STUDENT_ID, quantity: 1 }] });
 
     expect(res.status).toBe(201);
+    expect(res.body.order).toMatchObject({ subtotal: 0, processing_fee: 0, total: 0 });
+    const insert = query.mock.calls.find((call) => sqlOf(call).startsWith('INSERT INTO orders'));
+    expect(insert?.[1]).toEqual([BUYER_ID, EVENT_ID, 0, 0, 0, 0]);
   });
 
   it('returns 409 CONFLICT for a cancelled event', async () => {
@@ -327,7 +339,7 @@ describe('POST /api/orders/:id/pay', () => {
     ...orderRow,
     status: 'paid',
     expires_at: null as never,
-    payment_amount: 1000000,
+    payment_amount: 1030000,
     payment_currency: 'KZT',
     payment_method: 'simulated',
     payment_is_demonstration: true,
@@ -336,13 +348,30 @@ describe('POST /api/orders/:id/pay', () => {
 
   it('marks the order paid, records a demonstration payment and issues one ticket per seat', async () => {
     answer(
-      [{ status: 'pending', event_id: EVENT_ID, total: 1000000 }],
-      [{ id: 'item', ticket_type_id: TT_EARLY_ID, quantity: 2 }],
+      [
+        {
+          status: 'pending',
+          event_id: EVENT_ID,
+          event_title: 'Astana Tech Meetup',
+          total: 1030000,
+        },
+      ],
+      [
+        {
+          id: 'item',
+          ticket_type_id: TT_EARLY_ID,
+          name: 'Early Bird',
+          quantity: 2,
+          attendee_names: null,
+        },
+      ],
       [],
       [{ expired: false }],
       [],
       [],
-      [{ name: 'Aidos K.' }],
+      [{ name: 'Aidos K.', email: 'buyer@example.kz' }],
+      [],
+      [],
       [],
     );
     answerLoadOrder(paidOrderRow as never);
@@ -354,34 +383,64 @@ describe('POST /api/orders/:id/pay', () => {
     expect(res.body.order.payment).toEqual({
       method: 'simulated',
       is_demonstration: true,
-      amount: 1000000,
+      amount: 1030000,
       currency: 'KZT',
       paid_at: PAID_AT,
     });
     const payment = query.mock.calls.find((call) => sqlOf(call).startsWith('INSERT INTO payments'));
-    expect(payment?.[1]).toEqual([ORDER_ID, BUYER_ID, 1000000]);
+    expect(payment?.[1]).toEqual([ORDER_ID, BUYER_ID, 1030000]);
     const insert = query.mock.calls.find((call) => sqlOf(call).startsWith('INSERT INTO tickets'));
-    const [eventId, name, itemIds, typeIds, codes] = insert![1] as unknown[];
-    expect([eventId, name]).toEqual([EVENT_ID, 'Aidos K.']);
+    const [eventId, itemIds, typeIds, codes, names] = insert![1] as unknown[];
+    expect(eventId).toBe(EVENT_ID);
     expect(itemIds).toEqual(['item', 'item']);
     expect(typeIds).toEqual([TT_EARLY_ID, TT_EARLY_ID]);
     expect(codes).toHaveLength(2);
+    expect(names).toEqual(['Aidos K.', 'Aidos K.']);
     for (const code of codes as string[]) {
       expect(code).toMatch(/^BF-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/);
     }
+    const audit = query.mock.calls.find((call) => sqlOf(call).startsWith('INSERT INTO audit_log'));
+    expect(audit?.[1]).toEqual([
+      BUYER_ID,
+      'order.paid',
+      'order',
+      ORDER_ID,
+      EVENT_ID,
+      'Paid 2 tickets, 10300.00 KZT (simulated)',
+    ]);
+    const email = query.mock.calls.find((call) =>
+      sqlOf(call).startsWith('INSERT INTO email_outbox'),
+    );
+    expect(email?.[1]).toEqual([
+      BUYER_ID,
+      'buyer@example.kz',
+      'order_confirmation',
+      'Your tickets for Astana Tech Meetup',
+      `${(codes as string[])[0]}  Early Bird  Aidos K.\n${(codes as string[])[1]}  Early Bird  Aidos K.\nSee them with their QR codes: http://localhost:3001/tickets\nSimulated payment: 10300.00 KZT. No real money was charged.`,
+    ]);
   });
 
   it('records no payment for a free order', async () => {
     answer(
-      [{ status: 'pending', event_id: EVENT_ID, total: 0 }],
-      [{ id: 'item', ticket_type_id: TT_STUDENT_ID, quantity: 1 }],
+      [{ status: 'pending', event_id: EVENT_ID, event_title: 'Astana Tech Meetup', total: 0 }],
+      [
+        {
+          id: 'item',
+          ticket_type_id: TT_STUDENT_ID,
+          name: 'Student',
+          quantity: 1,
+          attendee_names: null,
+        },
+      ],
       [],
       [{ expired: false }],
       [],
-      [{ name: 'Aidos K.' }],
+      [{ name: 'Aidos K.', email: 'buyer@example.kz' }],
+      [],
+      [],
       [],
     );
-    answerLoadOrder({ ...orderRow, status: 'paid', subtotal: 0, total: 0 });
+    answerLoadOrder({ ...orderRow, status: 'paid', subtotal: 0, processing_fee: 0, total: 0 });
 
     const res = await pay();
 

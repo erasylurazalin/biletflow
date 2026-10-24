@@ -119,3 +119,25 @@ once anyway, so a second number buys nothing.
 
 **Where.** `HOLD_MINUTES` in `src/routes/orders.ts`, "Creating an order" in
 `docs/api.md`.
+
+---
+
+## 5. Attendees pay a 3% processing charge
+
+**Decision.** The attendee pays a processing charge, shown as a separate
+`processing_fee` line in the order total. It is 3% of the ticket price after discount,
+rounded to the nearest tiyn, and 0 for free tickets. The total, including this charge,
+is the amount of the simulated payment.
+
+**SRS basis.**
+
+- 4.6 asks the system to calculate ticket totals and processing charges.
+- 12 leaves open whether the attendee or the organizer pays the charge.
+
+**Rejected.** Adding the charge to the organizer's payout instead: attendees need to
+see the full checkout cost before the simulated payment. Folding it into ticket prices
+was rejected too, because SRS 4.6 calls for processing charges to be calculated and
+shown.
+
+**Where.** `PROCESSING_FEE_PERCENT` in `src/routes/orders.ts`, the "Orders" section of
+`docs/api.md`, and `migrations/007_checkout_details.sql`.
