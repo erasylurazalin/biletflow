@@ -10,6 +10,7 @@
  */
 import express from 'express';
 import { authRouter } from './routes/auth';
+import { checkInRouter } from './routes/check-in';
 import { eventsRouter } from './routes/events';
 import { meRouter } from './routes/me';
 import { ordersRouter } from './routes/orders';
@@ -36,6 +37,7 @@ export function createApp() {
   app.use('/api/tickets', ticketsRouter);
   app.use('/api', ticketTypesRouter);
   app.use('/api', staffRouter);
+  app.use('/api', checkInRouter);
   app.use('/api', paidSalesRouter);
 
   app.use(notFoundHandler);

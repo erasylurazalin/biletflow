@@ -440,14 +440,27 @@ gets `403 FORBIDDEN`, and a missing event is `404 EVENT_NOT_FOUND`.
 ```
 GET  /api/staff/events                        events I'm assigned to
 GET  /api/staff/events/:id/attendees          searchable list
-POST /api/staff/check-in   { qr_payload }     -> { result, ticket }
+POST /api/staff/check-in   { event_id, qr_payload } -> { result, ticket }
 POST /api/staff/check-in/:ticket_id/undo
+```
+
+A check-in ticket has this shape wherever a ticket is returned by these endpoints:
+
+```json
+{
+  "id": "...",
+  "code": "BF-7K2M-9XQP",
+  "status": "valid" | "checked_in" | "cancelled" | "refunded",
+  "attendee_name": "...",
+  "ticket_type_name": "...",
+  "checked_in_at": "..." | null
+}
 ```
 
 ```json
 {
   "result": "valid" | "already_used" | "cancelled" | "refunded" | "invalid" | "not_found" | "wrong_event",
-  "ticket": { ... },        // null if invalid or not_found
+  "ticket": { ... },        // null if invalid, not_found or wrong_event
   "checked_in_at": "..."    // present when already_used
 }
 ```
@@ -455,21 +468,54 @@ POST /api/staff/check-in/:ticket_id/undo
 `invalid` means the scanned string is not a ticket we signed: a Campaign QR Code, some
 other QR code, or a forged or damaged payload. `not_found` means the signature is
 right but no such ticket exists, which in practice means the database was reset after
-the ticket was issued.
+the ticket was issued. `wrong_event` means the ticket belongs to another event; its
+attendee details are not returned.
 
 `GET /api/staff/events` means the events this person is assigned to, and assignments
 live in the `event_staff` table (migration 002): one row per event and user, written
-when an organizer puts somebody on the door. Role `event_admin` alone opens no event.
-An unassigned staff member gets an empty list, and scanning a ticket for an event they
-are not assigned to is `403`.
+when an organizer puts somebody on the door. Role `event_admin` alone opens no event,
+and being the organizer does not by itself count as an assignment. An unassigned staff
+member gets an empty list, and check-in, undo and the attendees list require assignment
+to the ticket's event, otherwise they return `403`.
 
 `GET /api/staff/events` uses the list envelope (`{ events, limit, offset }`) and the
 same item shape as `GET /api/events`, soonest first. It lists events in every status,
 not only published ones: staff can be put on the door before the event is published,
 and a cancelled event shows up as `"cancelled"` instead of vanishing from the app.
 
-Always `200` unless the request itself is broken. A bad ticket is a normal
-answer, not an HTTP error — the app shows a red screen, not a crash.
+`GET /api/staff/events/:id/attendees` accepts the usual `limit` and `offset`, plus an
+optional `q` of at most 100 trimmed characters. Search matches `attendee_name` or
+`code`, case-insensitively. The list contains `valid` and `checked_in` tickets, ordered
+by attendee name and then ticket id:
+
+```json
+{
+  "attendees": [
+    {
+      "id": "...",
+      "code": "...",
+      "status": "valid",
+      "attendee_name": "...",
+      "ticket_type_name": "...",
+      "checked_in_at": null
+    }
+  ],
+  "counts": { "registered": 2, "checked_in": 1 },
+  "limit": 20,
+  "offset": 0
+}
+```
+
+The counts cover the whole event, ignoring search and paging. `registered` counts both
+`valid` and `checked_in` tickets; `checked_in` counts only checked-in tickets.
+
+Undo requires a ticket currently in `checked_in` status. A missing ticket is
+`404 TICKET_NOT_FOUND`; any other status is `409 CONFLICT`. Success restores `valid`,
+clears the check-in timestamp and staff member, and returns `200 { "ticket": { ... } }`.
+Successful check-in and undo write audit entries; other scan results do not.
+
+Scan results are always `200` unless the request itself is broken. A bad ticket is a
+normal answer, not an HTTP error: the app shows a red screen, not a crash.
 
 All validation is server-side. The phone decides nothing.
 
