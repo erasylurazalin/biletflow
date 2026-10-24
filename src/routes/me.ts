@@ -11,6 +11,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { pool } from '../db/pool';
+import { withTransaction } from '../db/transaction';
+import { recordAudit } from '../lib/audit';
 import { AppError, ErrorCode } from '../lib/errors';
 import { requireAuth, signToken, type AuthUser } from '../middleware/auth';
 
@@ -22,7 +24,8 @@ const PG_UNIQUE_VIOLATION = '23505';
 const PG_FOREIGN_KEY_VIOLATION = '23503';
 
 const PROFILE_COLUMNS = `p.user_id, p.display_name, p.contact_email, p.contact_phone,
-  p.payout_bank_name, p.payout_iban, p.payout_account_holder, p.created_at, p.updated_at`;
+  p.payout_bank_name, p.payout_iban, p.payout_account_holder, p.identity_verified_at,
+  p.created_at, p.updated_at`;
 
 interface ProfileRow {
   user_id: string;
@@ -32,6 +35,7 @@ interface ProfileRow {
   payout_bank_name: string | null;
   payout_iban: string | null;
   payout_account_holder: string | null;
+  identity_verified_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -59,6 +63,7 @@ function toProfile(row: ProfileRow) {
             iban: row.payout_iban,
             account_holder: row.payout_account_holder,
           },
+    identity_verified_at: row.identity_verified_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -283,6 +288,54 @@ meRouter.patch('/organizer-profile', requireAuth, async (req, res, next) => {
       // Deleted between the read and the update.
       throw notFound();
     }
+
+    res.json({ organizer_profile: toProfile(row) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/me/organizer-profile/verify-identity  - simulated identity check
+// ---------------------------------------------------------------------------
+
+// SRS 3.2 step 2 for paid sales. The academic MVP simulates it (SRS 3.2 allows that), so
+// it takes nothing, stores no document numbers and always succeeds. Only the first call
+// changes the profile and writes an audit entry; a repeat returns the same profile.
+meRouter.post('/organizer-profile/verify-identity', requireAuth, async (req, res, next) => {
+  try {
+    const userId = req.user!.id;
+    const row = await withTransaction(async (client) => {
+      const result = await client.query<ProfileRow & { organizer_profile_id: string }>(
+        `UPDATE organizer_profiles p
+            SET identity_verified_at = now()
+          WHERE p.user_id = $1
+            AND p.identity_verified_at IS NULL
+         RETURNING ${PROFILE_COLUMNS}, p.id AS organizer_profile_id`,
+        [userId],
+      );
+      const verified = result.rows[0];
+      if (verified) {
+        await recordAudit(client, {
+          actorId: userId,
+          action: 'organizer_profile.identity_verified',
+          entityType: 'organizer_profile',
+          entityId: verified.organizer_profile_id,
+          description: 'Completed the simulated organizer identity check',
+        });
+        return verified;
+      }
+
+      const existing = await client.query<ProfileRow>(
+        `SELECT ${PROFILE_COLUMNS} FROM organizer_profiles p WHERE p.user_id = $1`,
+        [userId],
+      );
+      const profile = existing.rows[0];
+      if (!profile) {
+        throw notFound();
+      }
+      return profile;
+    });
 
     res.json({ organizer_profile: toProfile(row) });
   } catch (err) {

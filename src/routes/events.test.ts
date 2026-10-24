@@ -86,26 +86,29 @@ describe('GET /api/events', () => {
 
 describe('GET /api/events/:id', () => {
   it('returns the event with its ticket types', async () => {
-    query.mockResolvedValueOnce(rows([eventRow])).mockResolvedValueOnce(
-      rows([
-        {
-          id: '55555555-5555-4555-8555-555555555555',
-          name: 'Early Bird',
-          price: 500000,
-          currency: 'KZT',
-          quantity_total: 100,
-          quantity_available: 57,
-          sales_start_at: null,
-          sales_end_at: null,
-          is_hidden: false,
-        },
-      ]),
-    );
+    query
+      .mockResolvedValueOnce(rows([{ ...eventRow, paid_sales_active: true }]))
+      .mockResolvedValueOnce(
+        rows([
+          {
+            id: '55555555-5555-4555-8555-555555555555',
+            name: 'Early Bird',
+            price: 500000,
+            currency: 'KZT',
+            quantity_total: 100,
+            quantity_available: 57,
+            sales_start_at: null,
+            sales_end_at: null,
+            is_hidden: false,
+          },
+        ]),
+      );
 
     const res = await request(app).get(`/api/events/${eventRow.id}`);
 
     expect(res.status).toBe(200);
     expect(res.body.event.description).toBe('Monthly meetup for developers.');
+    expect(res.body.event.paid_sales_active).toBe(true);
     expect(res.body.event.ticket_types[0]).toMatchObject({
       name: 'Early Bird',
       price: 500000,

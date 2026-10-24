@@ -29,6 +29,8 @@ const ORDER_ID = '99999999-9999-4999-8999-999999999999';
 const ORDER_ITEM_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const TICKET_1_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const TICKET_2_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+const FEE_PAYMENT_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+const ORDER_PAYMENT_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 
 // Every seeded user logs in with this password. It is printed at the end of the run,
 // which is fine for dev data and would be a disaster anywhere else.
@@ -64,18 +66,21 @@ async function seed(): Promise<void> {
   );
 
   // An organizer is a user with an organizer profile (migration 003). The payout
-  // account is demonstration data, like every payout in the MVP.
+  // account is demonstration data, like every payout in the MVP, and the identity check
+  // is the simulated one from migration 004.
   await pool.query(
     `INSERT INTO organizer_profiles (user_id, display_name, contact_email, contact_phone,
-                                     payout_bank_name, payout_iban, payout_account_holder)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+                                     payout_bank_name, payout_iban, payout_account_holder,
+                                     identity_verified_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
      ON CONFLICT (user_id) DO UPDATE
        SET display_name = EXCLUDED.display_name,
            contact_email = EXCLUDED.contact_email,
            contact_phone = EXCLUDED.contact_phone,
            payout_bank_name = EXCLUDED.payout_bank_name,
            payout_iban = EXCLUDED.payout_iban,
-           payout_account_holder = EXCLUDED.payout_account_holder`,
+           payout_account_holder = EXCLUDED.payout_account_holder,
+           identity_verified_at = COALESCE(organizer_profiles.identity_verified_at, now())`,
     [
       ORGANIZER_ID,
       'Astana Tech Community',
@@ -149,6 +154,23 @@ async function seed(): Promise<void> {
     ],
   );
 
+  // Paid sales are active on the tech meetup: fee paid (simulated), terms accepted,
+  // activated. The jazz night is left inactive on purpose, so the demo can show a paid
+  // ticket being refused and the organizer working through the checklist.
+  await pool.query(
+    `INSERT INTO payments (id, purpose, event_id, paid_by, amount, method)
+     VALUES ($1, 'activation_fee', $2, $3, 500000, 'simulated')
+     ON CONFLICT (id) DO NOTHING`,
+    [FEE_PAYMENT_ID, EVENT_TECH_ID, ORGANIZER_ID],
+  );
+  await pool.query(
+    `INSERT INTO paid_sales_activations
+            (event_id, terms_accepted_at, terms_accepted_by, activated_at, activated_by)
+     VALUES ($1, now(), $2, now(), $2)
+     ON CONFLICT (event_id) DO NOTHING`,
+    [EVENT_TECH_ID, ORGANIZER_ID],
+  );
+
   // The organizer puts Dana on the door of the tech meetup. No fixed id: the pair
   // (event_id, user_id) is what makes an assignment unique, and it may already exist
   // from somebody testing POST /api/events/:id/staff.
@@ -171,6 +193,14 @@ async function seed(): Promise<void> {
            total = EXCLUDED.total,
            expires_at = EXCLUDED.expires_at`,
     [ORDER_ID, ATTENDEE_ID, EVENT_TECH_ID],
+  );
+
+  // Paid orders above 0 KZT have a demonstration payment, like any paid through /pay.
+  await pool.query(
+    `INSERT INTO payments (id, purpose, order_id, paid_by, amount, method)
+     VALUES ($1, 'order', $2, $3, 1000000, 'simulated')
+     ON CONFLICT (id) DO NOTHING`,
+    [ORDER_PAYMENT_ID, ORDER_ID, ATTENDEE_ID],
   );
 
   await pool.query(
@@ -198,7 +228,8 @@ async function seed(): Promise<void> {
 
   console.log(
     'Seeded 3 users, 1 organizer profile, 2 published events, 3 ticket types,',
-    '1 staff assignment, 1 paid order with 2 tickets.',
+    '1 staff assignment, 1 paid order with 2 tickets,',
+    'paid sales active on the tech meetup and not on the jazz night.',
   );
   console.log(`Log in as organizer@, attendee@ or door@biletflow.kz with "${DEV_PASSWORD}".`);
   console.log(`Try: GET /api/events/${EVENT_TECH_ID}`);

@@ -6,7 +6,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 
-vi.mock('../db/pool', () => ({ pool: { query: vi.fn() } }));
+vi.mock('../db/pool', () => {
+  const query = vi.fn();
+  const clientQuery = vi.fn((sql: string, ...args: unknown[]) => {
+    if (/^(BEGIN|COMMIT|ROLLBACK)$/.test(sql.trim())) {
+      return Promise.resolve({ rows: [] });
+    }
+    return query(sql, ...args);
+  });
+  return {
+    pool: {
+      query,
+      connect: vi.fn(async () => ({ query: clientQuery, release: vi.fn() })),
+    },
+  };
+});
 
 import { pool } from '../db/pool';
 import { createApp } from '../app';
@@ -26,6 +40,7 @@ const profileRow = {
   payout_bank_name: 'Demo Bank',
   payout_iban: 'KZ000000000000000000',
   payout_account_holder: 'Aidos K.',
+  identity_verified_at: null,
   created_at: new Date(CREATED_AT),
   updated_at: new Date(CREATED_AT),
 };
@@ -36,6 +51,7 @@ const profile = {
   contact_email: 'hello@astanatech.kz',
   contact_phone: '+77011234567',
   payout: { bank_name: 'Demo Bank', iban: 'KZ000000000000000000', account_holder: 'Aidos K.' },
+  identity_verified_at: null,
   created_at: CREATED_AT,
   updated_at: CREATED_AT,
 };
@@ -285,5 +301,77 @@ describe('PATCH /api/me/organizer-profile', () => {
 
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe('ORGANIZER_PROFILE_NOT_FOUND');
+  });
+});
+
+describe('POST /api/me/organizer-profile/verify-identity', () => {
+  it('records the simulated identity check and its audit entry', async () => {
+    const VERIFIED_AT = '2026-10-13T12:00:00.000Z';
+    const PROFILE_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    query
+      .mockResolvedValueOnce(
+        rows([
+          {
+            ...profileRow,
+            identity_verified_at: new Date(VERIFIED_AT),
+            organizer_profile_id: PROFILE_ID,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(rows([]));
+
+    const res = await request(app)
+      .post('/api/me/organizer-profile/verify-identity')
+      .set('Authorization', bearer('organizer'));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      organizer_profile: { ...profile, identity_verified_at: VERIFIED_AT },
+    });
+    expect(String(query.mock.calls[0]?.[0])).toContain('p.identity_verified_at IS NULL');
+    expect(String(query.mock.calls[1]?.[0])).toContain('INSERT INTO audit_log');
+    expect(query.mock.calls[1]?.[1]).toEqual([
+      USER_ID,
+      'organizer_profile.identity_verified',
+      'organizer_profile',
+      PROFILE_ID,
+      null,
+      'Completed the simulated organizer identity check',
+    ]);
+  });
+
+  it('does not write another audit entry when identity is already verified', async () => {
+    query
+      .mockResolvedValueOnce(rows([]))
+      .mockResolvedValueOnce(rows([{ ...profileRow, identity_verified_at: new Date() }]));
+
+    const res = await request(app)
+      .post('/api/me/organizer-profile/verify-identity')
+      .set('Authorization', bearer('organizer'));
+
+    expect(res.status).toBe(200);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(String(query.mock.calls[0]?.[0])).not.toContain('INSERT INTO audit_log');
+  });
+
+  it('returns 404 without a profile and writes no audit entry', async () => {
+    query.mockResolvedValueOnce(rows([])).mockResolvedValueOnce(rows([]));
+
+    const res = await request(app)
+      .post('/api/me/organizer-profile/verify-identity')
+      .set('Authorization', bearer());
+
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('ORGANIZER_PROFILE_NOT_FOUND');
+    expect(query.mock.calls.some((call) => String(call[0]).includes('INSERT INTO audit_log'))).toBe(
+      false,
+    );
+  });
+
+  it('returns 401 without a token', async () => {
+    const res = await request(app).post('/api/me/organizer-profile/verify-identity');
+
+    expect(res.status).toBe(401);
+    expect(query).not.toHaveBeenCalled();
   });
 });

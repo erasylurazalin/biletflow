@@ -28,17 +28,20 @@ curl http://localhost:3000/api/events
 
 Frontend: `cd web && npm ci && npm run dev`, then http://localhost:3001.
 
-`npm test` runs without a database. CI runs typecheck, lint, format check and tests on
-every pull request.
+`npm test` runs without a database. The tests that need a real Postgres (the
+last-ticket race, paid checkout) run when `TEST_DATABASE_URL` points at a separate,
+migrated database; see the top of `src/routes/orders.db.test.ts`. CI runs typecheck,
+lint, format check and all tests on every pull request.
 
 ## Status
 
-Built: public event endpoints, JWT auth middleware, event staff table, the event list
-and detail pages.
+Built: auth, organizer profiles, ticket types, staff assignment, orders with free
+registration and simulated paid checkout, paid sales activation, tickets with signed QR
+payloads, and the event list and detail pages. All payments are simulated and labelled
+as demonstration data.
 
 Not built yet:
 
-- Register and login endpoints
-- Write endpoints for events and ticket types
-- Orders, tickets, QR payloads, payments, check-in
+- Write endpoints for events
+- Check-in
 - The rest of the frontend (checkout, auth, my tickets) and the mobile scanner app

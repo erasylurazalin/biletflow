@@ -135,6 +135,7 @@ const idParamSchema = z.object({ id: z.uuid() });
 
 interface EventDetailRow extends Omit<EventListRow, 'short_description'> {
   description: string;
+  paid_sales_active: boolean;
 }
 
 interface TicketTypeRow {
@@ -168,7 +169,12 @@ eventsRouter.get('/:id', async (req, res, next) => {
               e.status,
               e.cover_image_url,
               u.id   AS organizer_id,
-              u.name AS organizer_name
+              u.name AS organizer_name,
+              -- Whether paid ticket types can be bought yet (migration 004).
+              EXISTS (SELECT 1
+                        FROM paid_sales_activations psa
+                       WHERE psa.event_id = e.id
+                         AND psa.activated_at IS NOT NULL) AS paid_sales_active
          FROM events e
          JOIN users u ON u.id = e.organizer_id
         WHERE e.id = $1
@@ -225,6 +231,7 @@ eventsRouter.get('/:id', async (req, res, next) => {
         status: event.status,
         cover_image_url: event.cover_image_url,
         organizer: { id: event.organizer_id, name: event.organizer_name },
+        paid_sales_active: event.paid_sales_active,
         ticket_types: ticketTypesResult.rows,
       },
     });

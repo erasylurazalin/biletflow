@@ -59,3 +59,63 @@ attendee at another, and an organizer may want to scan at their own door.
 
 **Where.** `migrations/002_event_staff.sql`, `src/routes/staff.ts`, the "Staff
 assignments" and "Check-in" sections of `docs/api.md`.
+
+---
+
+## 3. Paid sales activation is a five-item checklist, simulated where it touches money
+
+**Decision.** Paid ticket types on an event can be bought only after the organizer
+activates paid sales for that event. Activation checks five things: the event has a
+paid ticket type, the organizer passed the identity check, the organizer profile has a
+payout account, the activation fee is paid, and the paid-event terms are accepted.
+Identity and payout belong to the organizer and count for every event. The fee and
+the terms are per event. The identity check, the fee and every ticket payment are
+simulated: nothing is checked against real documents and no money moves. The fee is
+5,000 KZT.
+
+Every payment is stored with `is_demonstration = true`, the database refuses a
+simulated payment marked as real, and the API returns the flag on every payment.
+
+**SRS basis.**
+
+- 3.2: the five steps, and "identity checks, activation-fee payment, ticket payment,
+  and organizer payouts may be implemented with a provider sandbox or clearly labelled
+  simulation".
+- 3.3: the fee is "one-time per event, charged in KZT; amount to be determined". 5,000
+  KZT is our pick until the instructor or a platform admin setting says otherwise.
+- 4.5: paid tickets are not purchasable before activation, the organizer sees a
+  checklist, the fee payment is recorded, and activation applies only to the selected
+  event.
+- 4.6 and 11: demonstration payments are never presented as real transactions, and an
+  organizer can "complete the simulated or sandboxed paid-sales activation".
+- UC2: the flow is verification, payout account, fee, terms.
+
+**Rejected.** Leaving the identity step out: 3.2 lists it, so the checklist would not
+match the SRS. Repeating identity and payout for every event: they describe the
+organizer, not the event, and 4.1 puts payout information on the organizer profile. A
+real payment sandbox: 3.2 allows a labelled simulation, and a sandbox account is one
+more thing that can break on demo day.
+
+**Where.** `migrations/004_paid_sales.sql`, `src/routes/paid-sales.ts`,
+`src/lib/payments.ts`, the "Paid sales activation" and "Orders" sections of
+`docs/api.md`.
+
+---
+
+## 4. A pending order holds its seats for 15 minutes
+
+**Decision.** Placing an order holds its seats for 15 minutes, for free and paid
+orders alike. After that the order holds nothing, reads as `cancelled`, and cannot be
+paid, so it never produces tickets.
+
+**SRS basis.**
+
+- 4.6: "ticket inventory shall be temporarily reserved during checkout", and "failed or
+  abandoned transactions shall not create valid tickets". No duration is given.
+
+**Rejected.** 10 minutes, our first default: tight for somebody filling in attendee
+details on a phone. Separate times for free and paid orders: a free order is paid at
+once anyway, so a second number buys nothing.
+
+**Where.** `HOLD_MINUTES` in `src/routes/orders.ts`, "Creating an order" in
+`docs/api.md`.
