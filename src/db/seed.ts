@@ -44,13 +44,14 @@ async function seed(): Promise<void> {
   // The door user is a plain attendee on purpose: being on an event's staff is what
   // lets somebody scan (docs/decisions.md), not their role.
   await pool.query(
-    `INSERT INTO users (id, email, password_hash, name, role)
-     VALUES ($1, $2, $4, $3, 'organizer'), ($5, $6, $4, $7, 'attendee'), ($8, $9, $4, $10, 'attendee')
+    `INSERT INTO users (id, email, password_hash, name, role, email_verified_at)
+     VALUES ($1, $2, $4, $3, 'organizer', now()), ($5, $6, $4, $7, 'attendee', now()), ($8, $9, $4, $10, 'attendee', now())
      ON CONFLICT (id) DO UPDATE
        SET email = EXCLUDED.email,
            password_hash = EXCLUDED.password_hash,
            name = EXCLUDED.name,
-           role = EXCLUDED.role`,
+           role = EXCLUDED.role,
+           email_verified_at = now()`,
     [
       ORGANIZER_ID,
       'organizer@biletflow.kz',

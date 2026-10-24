@@ -34,6 +34,7 @@ describe.skipIf(!TEST_DATABASE_URL)(
 
     it('publishes, sells a ticket, then cancels the event and ticket with audit entries', async () => {
       const organizer = await register('Organizer');
+      await pool.query('UPDATE users SET email_verified_at = now() WHERE id = $1', [organizer.id]);
       const profile = await request(app)
         .post('/api/me/organizer-profile')
         .set('Authorization', `Bearer ${organizer.token}`)

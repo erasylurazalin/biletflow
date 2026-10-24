@@ -36,6 +36,7 @@ describe.skipIf(!TEST_DATABASE_URL)('check-in against a real database', () => {
     }
 
     const organizer = await register('Check-in Organizer');
+    await pool.query('UPDATE users SET email_verified_at = now() WHERE id = $1', [organizer.id]);
     const profile = await request(app)
       .post('/api/me/organizer-profile')
       .set('Authorization', `Bearer ${organizer.token}`)

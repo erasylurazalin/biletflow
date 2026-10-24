@@ -1,5 +1,6 @@
 /**
- * Auth endpoints: register, login, me. Same layering as routes/events.ts.
+ * Auth endpoints: register, login, me and email verification. Same layering as
+ * routes/events.ts.
  *
  * Passwords are hashed with bcrypt (bcryptjs: same algorithm, no native build step on
  * Windows). The token is a JWT carrying { id, role }, signed and verified in
@@ -7,15 +8,20 @@
  */
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
+import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { pool } from '../db/pool';
+import { withTransaction } from '../db/transaction';
+import { createEmailToken, consumeEmailToken } from '../lib/email-tokens';
 import { AppError, ErrorCode } from '../lib/errors';
+import { sendEmail, webUrl } from '../lib/mailer';
 import { requireAuth, signToken, type AuthUser } from '../middleware/auth';
 
 export const authRouter = Router();
 
 // 10 rounds is ~50-100ms per hash: slow for an attacker, unnoticeable for a person.
 const BCRYPT_ROUNDS = 10;
+const VERIFY_EMAIL_TTL_MINUTES = 24 * 60;
 
 // Compared against when login finds no user, so an unknown email costs the same bcrypt
 // time as a wrong password and response timing does not reveal who has an account.
@@ -30,11 +36,18 @@ interface UserRow {
   email: string;
   name: string;
   role: AuthUser['role'];
+  email_verified_at: Date | null;
 }
 
 // docs/api.md "user" object. password_hash must never leave this file.
 function toUser(row: UserRow) {
-  return { id: row.id, email: row.email, name: row.name, role: row.role };
+  return {
+    id: row.id,
+    email: row.email,
+    name: row.name,
+    role: row.role,
+    email_verified: row.email_verified_at !== null,
+  };
 }
 
 function badRequestFrom(error: z.ZodError): AppError {
@@ -46,6 +59,18 @@ function badRequestFrom(error: z.ZodError): AppError {
 
 // Emails are stored and compared lower-cased (see users_email_lower_idx).
 const emailSchema = z.string().trim().toLowerCase().pipe(z.email());
+
+async function sendVerificationEmail(client: PoolClient, user: UserRow): Promise<void> {
+  const token = await createEmailToken(client, user.id, 'verify_email', VERIFY_EMAIL_TTL_MINUTES);
+  const link = `${webUrl()}/verify-email?token=${token}`;
+  await sendEmail(client, {
+    userId: user.id,
+    to: user.email,
+    kind: 'verify_email',
+    subject: 'Confirm your BiletFlow email',
+    body: `Confirm your BiletFlow email by opening this link:\n\n${link}\n\nThis link is valid for 24 hours.`,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // POST /api/auth/register
@@ -72,26 +97,30 @@ authRouter.post('/register', async (req, res, next) => {
 
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
-    let user: UserRow | undefined;
-    try {
-      // No "SELECT first, then INSERT": two requests could both pass the check. The
-      // unique index decides, and we translate its error.
-      const result = await pool.query<UserRow>(
-        `INSERT INTO users (email, password_hash, name)
-         VALUES ($1, $2, $3)
-         RETURNING id, email, name, role`,
-        [email, passwordHash, name],
-      );
-      user = result.rows[0];
-    } catch (err) {
-      if ((err as { code?: string }).code === PG_UNIQUE_VIOLATION) {
-        throw AppError.conflict(ErrorCode.CONFLICT, 'An account with this email already exists');
+    const user = await withTransaction(async (client) => {
+      let inserted: UserRow | undefined;
+      try {
+        // No "SELECT first, then INSERT": two requests could both pass the check. The
+        // unique index decides, and we translate its error.
+        const result = await client.query<UserRow>(
+          `INSERT INTO users (email, password_hash, name)
+           VALUES ($1, $2, $3)
+           RETURNING id, email, name, role, email_verified_at`,
+          [email, passwordHash, name],
+        );
+        inserted = result.rows[0];
+      } catch (err) {
+        if ((err as { code?: string }).code === PG_UNIQUE_VIOLATION) {
+          throw AppError.conflict(ErrorCode.CONFLICT, 'An account with this email already exists');
+        }
+        throw err;
       }
-      throw err;
-    }
-    if (!user) {
-      throw new Error('INSERT INTO users returned no row');
-    }
+      if (!inserted) {
+        throw new Error('INSERT INTO users returned no row');
+      }
+      await sendVerificationEmail(client, inserted);
+      return inserted;
+    });
 
     res.status(201).json({ user: toUser(user), token: signToken(user) });
   } catch (err) {
@@ -117,7 +146,7 @@ authRouter.post('/login', async (req, res, next) => {
     const { email, password } = parsed.data;
 
     const result = await pool.query<UserRow & { password_hash: string }>(
-      `SELECT id, email, name, role, password_hash
+      `SELECT id, email, name, role, password_hash, email_verified_at
          FROM users
         WHERE lower(email) = $1`,
       [email],
@@ -145,7 +174,7 @@ authRouter.get('/me', requireAuth, async (req, res, next) => {
   try {
     // requireAuth guarantees req.user.
     const result = await pool.query<UserRow>(
-      `SELECT id, email, name, role FROM users WHERE id = $1`,
+      `SELECT id, email, name, role, email_verified_at FROM users WHERE id = $1`,
       [req.user!.id],
     );
     const user = result.rows[0];
@@ -155,6 +184,69 @@ authRouter.get('/me', requireAuth, async (req, res, next) => {
     }
 
     res.json({ user: toUser(user) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/auth/verify-email
+// ---------------------------------------------------------------------------
+
+const verifyEmailSchema = z.object({ token: z.string().trim().min(1) });
+
+authRouter.post('/verify-email', async (req, res, next) => {
+  try {
+    const parsed = verifyEmailSchema.safeParse(req.body);
+    if (!parsed.success) {
+      throw badRequestFrom(parsed.error);
+    }
+
+    const userId = await consumeEmailToken(pool, parsed.data.token, 'verify_email');
+    if (!userId) {
+      throw new AppError(ErrorCode.INVALID_TOKEN, 'This link is invalid or has expired', 400);
+    }
+
+    const result = await pool.query<UserRow>(
+      `UPDATE users
+          SET email_verified_at = COALESCE(email_verified_at, now())
+        WHERE id = $1
+        RETURNING id, email, name, role, email_verified_at`,
+      [userId],
+    );
+    const user = result.rows[0];
+    if (!user) {
+      throw AppError.unauthorized();
+    }
+
+    res.json({ user: toUser(user) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/auth/verify-email/resend
+// ---------------------------------------------------------------------------
+
+authRouter.post('/verify-email/resend', requireAuth, async (req, res, next) => {
+  try {
+    const result = await pool.query<UserRow>(
+      `SELECT id, email, name, role, email_verified_at FROM users WHERE id = $1`,
+      [req.user!.id],
+    );
+    const user = result.rows[0];
+    if (!user) {
+      throw AppError.unauthorized();
+    }
+    if (user.email_verified_at !== null) {
+      throw AppError.conflict(ErrorCode.CONFLICT, 'Your email is already verified');
+    }
+
+    await withTransaction(async (client) => {
+      await sendVerificationEmail(client, user);
+    });
+    res.json({ sent: true });
   } catch (err) {
     next(err);
   }

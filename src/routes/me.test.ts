@@ -82,9 +82,12 @@ describe('POST /api/me/organizer-profile', () => {
       account_holder: 'Aidos K.',
     },
   };
+  const verifiedUser = { email_verified_at: new Date('2026-10-24T10:00:00.000Z') };
 
   it('creates the profile, makes the user an organizer and returns a token saying so', async () => {
-    query.mockResolvedValueOnce(rows([{ ...profileRow, ...userAfter }]));
+    query
+      .mockResolvedValueOnce(rows([verifiedUser]))
+      .mockResolvedValueOnce(rows([{ ...profileRow, ...userAfter }]));
 
     const res = await request(app)
       .post('/api/me/organizer-profile')
@@ -96,7 +99,7 @@ describe('POST /api/me/organizer-profile', () => {
     expect(res.body.user).toEqual(userAfter);
     expect(jwt.decode(res.body.token)).toMatchObject({ id: USER_ID, role: 'organizer' });
     // Normalized before it reaches the database.
-    expect(query.mock.calls[0]?.[1]).toEqual([
+    expect(query.mock.calls[1]?.[1]).toEqual([
       USER_ID,
       'Astana Tech Community',
       'hello@astanatech.kz',
@@ -115,7 +118,7 @@ describe('POST /api/me/organizer-profile', () => {
   });
 
   it('needs only a display name and one way to make contact', async () => {
-    query.mockResolvedValueOnce(
+    query.mockResolvedValueOnce(rows([verifiedUser])).mockResolvedValueOnce(
       rows([
         {
           ...profileRow,
@@ -135,7 +138,7 @@ describe('POST /api/me/organizer-profile', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.organizer_profile.payout).toBeNull();
-    expect(query.mock.calls[0]?.[1]).toEqual([
+    expect(query.mock.calls[1]?.[1]).toEqual([
       USER_ID,
       'Astana Tech Community',
       null,
@@ -146,8 +149,28 @@ describe('POST /api/me/organizer-profile', () => {
     ]);
   });
 
+  it('returns 403 when the email is not verified', async () => {
+    query.mockResolvedValueOnce(rows([{ email_verified_at: null }]));
+
+    const res = await request(app)
+      .post('/api/me/organizer-profile')
+      .set('Authorization', bearer())
+      .send(body);
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({
+      error: {
+        code: 'EMAIL_NOT_VERIFIED',
+        message: 'Verify your email before creating an organizer profile',
+      },
+    });
+    expect(query).toHaveBeenCalledOnce();
+  });
+
   it('returns 409 when the user already has a profile', async () => {
-    query.mockRejectedValueOnce(Object.assign(new Error('duplicate key'), { code: '23505' }));
+    query
+      .mockResolvedValueOnce(rows([verifiedUser]))
+      .mockRejectedValueOnce(Object.assign(new Error('duplicate key'), { code: '23505' }));
 
     const res = await request(app)
       .post('/api/me/organizer-profile')
@@ -373,5 +396,41 @@ describe('POST /api/me/organizer-profile/verify-identity', () => {
 
     expect(res.status).toBe(401);
     expect(query).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/me/emails', () => {
+  it("returns the caller's simulated inbox newest first", async () => {
+    const createdAt = new Date('2026-10-24T10:00:00.000Z');
+    query.mockResolvedValueOnce(
+      rows([
+        {
+          id: '22222222-2222-4222-8222-222222222222',
+          kind: 'verify_email',
+          subject: 'Confirm your BiletFlow email',
+          body: 'http://localhost:3001/verify-email?token=secret',
+          created_at: createdAt,
+        },
+      ]),
+    );
+
+    const res = await request(app).get('/api/me/emails').set('Authorization', bearer());
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      emails: [
+        {
+          id: '22222222-2222-4222-8222-222222222222',
+          kind: 'verify_email',
+          subject: 'Confirm your BiletFlow email',
+          body: 'http://localhost:3001/verify-email?token=secret',
+          created_at: createdAt.toISOString(),
+        },
+      ],
+    });
+    expect(query.mock.calls[0]?.[1]).toEqual([USER_ID]);
+    expect(String(query.mock.calls[0]?.[0])).toContain('lower(u.email) = lower(e.to_email)');
+    expect(String(query.mock.calls[0]?.[0])).toContain('ORDER BY e.created_at DESC');
+    expect(String(query.mock.calls[0]?.[0])).toContain('LIMIT 50');
   });
 });
