@@ -43,6 +43,7 @@ describe.skipIf(!TEST_DATABASE_URL)('paid checkout against a real database', () 
   // made through the API except the event, which has no create endpoint yet.
   async function organizerWithPaidEvent(quantityTotal: number) {
     const user = await register('Organizer');
+    await pool.query('UPDATE users SET email_verified_at = now() WHERE id = $1', [user.id]);
     const profile = await request(app)
       .post('/api/me/organizer-profile')
       .set('Authorization', `Bearer ${user.token}`)

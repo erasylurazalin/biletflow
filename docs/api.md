@@ -42,9 +42,11 @@ Frontend can show `message` directly. `code` is for logic.
 ## Auth
 
 ```
-POST /api/auth/register    { email, password, name }        -> { user, token }
-POST /api/auth/login       { email, password }              -> { user, token }
-GET  /api/auth/me                                           -> { user }
+POST /api/auth/register              { email, password, name } -> { user, token }
+POST /api/auth/login                 { email, password }       -> { user, token }
+GET  /api/auth/me                                                -> { user }
+POST /api/auth/verify-email          { token }                 -> { user }
+POST /api/auth/verify-email/resend                             -> { sent: true }
 ```
 
 ```json
@@ -52,21 +54,52 @@ GET  /api/auth/me                                           -> { user }
   "id": "uuid",
   "email": "aidos@example.kz",
   "name": "Aidos",
-  "role": "attendee" | "organizer" | "event_admin" | "platform_admin"
+  "role": "attendee" | "organizer" | "event_admin" | "platform_admin",
+  "email_verified": false
 }
 ```
 
-Everyone registers as `attendee`. Creating an organizer profile (below) is what turns a
-user into an `organizer`. The role lives in the token, so after it changes the client
-uses the new token: the one `POST /api/me/organizer-profile` returns, or one from a
-fresh login.
+Everyone registers as `attendee` with `email_verified: false`. Registration sends a
+verification link that is valid for 24 hours and can be used once. `verify-email` needs
+no auth token; an invalid, expired or used link is `400 INVALID_TOKEN`. `resend` requires
+auth and sends a fresh link unless the email is already verified (`409 CONFLICT`).
+
+Creating an organizer profile (below) is what turns a user into an `organizer`. The role
+lives in the token, so after it changes the client uses the new token: the one
+`POST /api/me/organizer-profile` returns, or one from a fresh login.
+
+---
+
+## Email (simulated)
+
+Email is simulated for the academic MVP (SRS 3.2 and 4.6 allow simulations). Every
+message is written to the `email_outbox` table and one line is logged without the body.
+The outbox contains the recipients, subjects and bodies a real provider would receive.
+
+`GET /api/me/emails` requires auth and returns the caller's simulated inbox, matched by
+email case-insensitively, newest first and limited to 50 messages:
+
+```json
+{
+  "emails": [
+    {
+      "id": "uuid",
+      "kind": "verify_email",
+      "subject": "Confirm your BiletFlow email",
+      "body": "...verification link...",
+      "created_at": "..."
+    }
+  ]
+}
+```
 
 ---
 
 ## Organizer profile
 
-Becoming an organizer is self-service: no approval. Verification is a separate, later
-step that only gates paid ticket sales. It never blocks creating events.
+Becoming an organizer is self-service: no approval, but the caller's email must be
+verified. Identity verification is a separate, later step that only gates paid ticket
+sales. It never blocks creating events.
 
 ```
 POST  /api/me/organizer-profile   { display_name, contact_email?, contact_phone?, payout? }
@@ -97,7 +130,8 @@ All four need a token, and all four work on the caller's own profile only.
 
 - `POST` creates the profile and switches the caller's role to `organizer`. A
   `platform_admin` keeps their role. It answers `201` with the updated `user` and a new
-  `token` carrying the new role. A second `POST` is `409 CONFLICT`: edit with `PATCH`.
+  `token` carrying the new role. An unverified email is `403 EMAIL_NOT_VERIFIED`. A second
+  `POST` is `409 CONFLICT`: edit with `PATCH`.
 - `display_name` is required, and at least one of `contact_email` and `contact_phone`.
   The phone is in international format and is stored without spaces or dashes:
   `"+7 (701) 123-45-67"` becomes `"+77011234567"`. The email is stored lower-cased.

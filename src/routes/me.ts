@@ -156,6 +156,22 @@ meRouter.post('/organizer-profile', requireAuth, async (req, res, next) => {
       throw badRequestFrom(parsed.error);
     }
 
+    const userResult = await pool.query<{ email_verified_at: Date | null }>(
+      'SELECT email_verified_at FROM users WHERE id = $1',
+      [req.user!.id],
+    );
+    const account = userResult.rows[0];
+    if (!account) {
+      throw AppError.unauthorized();
+    }
+    if (account.email_verified_at === null) {
+      throw new AppError(
+        ErrorCode.EMAIL_NOT_VERIFIED,
+        'Verify your email before creating an organizer profile',
+        403,
+      );
+    }
+
     // One statement, so the profile and the role change happen together or not at
     // all. A platform_admin keeps their role: organizing must not demote them.
     let row: (ProfileRow & UserRow) | undefined;
@@ -338,6 +354,27 @@ meRouter.post('/organizer-profile/verify-identity', requireAuth, async (req, res
     });
 
     res.json({ organizer_profile: toProfile(row) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/me/emails  - simulated inbox
+// ---------------------------------------------------------------------------
+
+meRouter.get('/emails', requireAuth, async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `SELECT e.id, e.kind, e.subject, e.body, e.created_at
+         FROM email_outbox e
+         JOIN users u ON lower(u.email) = lower(e.to_email)
+        WHERE u.id = $1
+        ORDER BY e.created_at DESC
+        LIMIT 50`,
+      [req.user!.id],
+    );
+    res.json({ emails: result.rows });
   } catch (err) {
     next(err);
   }
