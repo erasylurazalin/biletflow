@@ -161,13 +161,20 @@ describe.skipIf(!TEST_DATABASE_URL)('paid checkout against a real database', () 
     // After activation: pending, then pay.
     const placed = await placeOrder(buyer.token, organizer.eventId, organizer.ticketTypeId, 2);
     expect(placed.status).toBe(201);
-    expect(placed.body.order).toMatchObject({ status: 'pending', total: 1000000, payment: null });
+    // Two tickets at 5,000 KZT plus the 3% processing charge (docs/decisions.md).
+    expect(placed.body.order).toMatchObject({
+      status: 'pending',
+      subtotal: 1000000,
+      processing_fee: 30000,
+      total: 1030000,
+      payment: null,
+    });
 
     const paid = await pay(buyer.token, placed.body.order.id);
     expect(paid.status).toBe(200);
     expect(paid.body.order).toMatchObject({
       status: 'paid',
-      payment: { method: 'simulated', is_demonstration: true, amount: 1000000, currency: 'KZT' },
+      payment: { method: 'simulated', is_demonstration: true, amount: 1030000, currency: 'KZT' },
     });
     const tickets = paid.body.order.tickets as { id: string; qr_payload: string }[];
     expect(tickets).toHaveLength(2);

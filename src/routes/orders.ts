@@ -29,7 +29,9 @@ import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { pool } from '../db/pool';
 import { withTransaction } from '../db/transaction';
+import { recordAudit } from '../lib/audit';
 import { AppError, ErrorCode } from '../lib/errors';
+import { sendEmail, webUrl } from '../lib/mailer';
 import { PAYMENT_COLUMNS, toPayment, type PaymentColumns } from '../lib/payments';
 import { requireAuth } from '../middleware/auth';
 import { HELD_SQL } from './ticket-types';
@@ -39,6 +41,9 @@ export const ordersRouter = Router();
 
 // SRS 4.3 asks for a per-order limit. 10 is our default until organizers can set one.
 const MAX_TICKETS_PER_ORDER = 10;
+
+// The attendee pays this percentage of the discounted ticket price (docs/decisions.md).
+const PROCESSING_FEE_PERCENT = 3;
 
 // How long a pending order holds its seats. The SRS gives no time; 15 minutes is our
 // default (docs/decisions.md). Constant, so safe to put into the SQL with ${}.
@@ -59,6 +64,7 @@ const ORDER_SELECT = `SELECT o.id,
          e.title AS event_title,
          o.subtotal,
          o.discount,
+         o.processing_fee,
          o.total,
          o.created_at,
          o.expires_at,
@@ -74,6 +80,7 @@ interface OrderRow extends PaymentColumns {
   event_title: string;
   subtotal: number;
   discount: number;
+  processing_fee: number;
   total: number;
   created_at: Date;
   expires_at: Date | null;
@@ -103,6 +110,7 @@ function toOrder(row: OrderRow, items: OrderItemRow[], tickets?: TicketRow[]) {
       })),
     subtotal: row.subtotal,
     discount: row.discount,
+    processing_fee: row.processing_fee,
     total: row.total,
     created_at: row.created_at,
     expires_at: row.expires_at,
@@ -193,10 +201,16 @@ const createSchema = z
     event_id: z.uuid(),
     items: z
       .array(
-        z.object({
-          ticket_type_id: z.uuid(),
-          quantity: z.number().int().min(1).max(MAX_TICKETS_PER_ORDER),
-        }),
+        z
+          .object({
+            ticket_type_id: z.uuid(),
+            quantity: z.number().int().min(1).max(MAX_TICKETS_PER_ORDER),
+            attendee_names: z.array(z.string().trim().min(1).max(100)).optional(),
+          })
+          .refine(
+            (item) => !item.attendee_names || item.attendee_names.length === item.quantity,
+            'attendee_names must have one name per ticket',
+          ),
       )
       .min(1),
   })
@@ -331,15 +345,19 @@ ordersRouter.post('/', requireAuth, async (req, res, next) => {
         (sum, item) => sum + item.quantity * types.get(item.ticket_type_id)!.price,
         0,
       );
+      const discount = 0;
+      const processingFee = Math.round(((subtotal - discount) * PROCESSING_FEE_PERCENT) / 100);
+      const total = subtotal - discount + processingFee;
 
       let orderResult;
       try {
         // requireAuth guarantees req.user.
         orderResult = await client.query<{ id: string }>(
-          `INSERT INTO orders (user_id, event_id, status, subtotal, discount, total, expires_at)
-           VALUES ($1, $2, 'pending', $3, 0, $3, now() + interval '${HOLD_MINUTES} minutes')
+          `INSERT INTO orders
+             (user_id, event_id, status, subtotal, discount, processing_fee, total, expires_at)
+           VALUES ($1, $2, 'pending', $3, $4, $5, $6, now() + interval '${HOLD_MINUTES} minutes')
            RETURNING id`,
-          [req.user!.id, eventId, subtotal],
+          [req.user!.id, eventId, subtotal, discount, processingFee, total],
         );
       } catch (err) {
         if ((err as { code?: string }).code === PG_FOREIGN_KEY_VIOLATION) {
@@ -351,11 +369,22 @@ ordersRouter.post('/', requireAuth, async (req, res, next) => {
       const newOrderId = orderResult.rows[0]!.id;
 
       await client.query(
-        `INSERT INTO order_items (order_id, ticket_type_id, name, quantity, unit_price)
-         SELECT $1, tt.id, tt.name, item.quantity, tt.price
-           FROM unnest($2::uuid[], $3::int[]) AS item (ticket_type_id, quantity)
+        `INSERT INTO order_items
+           (order_id, ticket_type_id, name, quantity, unit_price, attendee_names)
+         SELECT $1, tt.id, tt.name, item.quantity, tt.price,
+                CASE WHEN item.names = 'null' THEN NULL
+                     ELSE (SELECT array_agg(x)
+                             FROM jsonb_array_elements_text(item.names::jsonb) AS x)
+                END
+           FROM unnest($2::uuid[], $3::int[], $4::text[])
+                AS item (ticket_type_id, quantity, names)
            JOIN ticket_types tt ON tt.id = item.ticket_type_id`,
-        [newOrderId, ticketTypeIds, items.map((item) => item.quantity)],
+        [
+          newOrderId,
+          ticketTypeIds,
+          items.map((item) => item.quantity),
+          items.map((item) => JSON.stringify(item.attendee_names ?? null)),
+        ],
       );
 
       return newOrderId;
@@ -374,7 +403,9 @@ ordersRouter.post('/', requireAuth, async (req, res, next) => {
 interface PayItemRow {
   id: string;
   ticket_type_id: string;
+  name: string;
   quantity: number;
+  attendee_names: string[] | null;
 }
 
 async function issueTickets(
@@ -383,22 +414,30 @@ async function issueTickets(
   eventId: string,
   attendeeName: string,
   items: PayItemRow[],
-): Promise<void> {
-  // One ticket per seat: an item with quantity 2 gives two tickets.
-  const seats = items.flatMap((item) => Array.from({ length: item.quantity }, () => item));
+) {
+  // One ticket per seat: an item with quantity 2 gives two tickets. Checkout names
+  // override the buyer's account name seat by seat.
+  const seats = items.flatMap((item) =>
+    Array.from({ length: item.quantity }, (_, index) => ({
+      item,
+      code: ticketCode(),
+      attendeeName: item.attendee_names?.[index] ?? attendeeName,
+    })),
+  );
   await client.query(
     `INSERT INTO tickets (order_item_id, event_id, ticket_type_id, code, attendee_name)
-     SELECT seat.order_item_id, $1, seat.ticket_type_id, seat.code, $2
-       FROM unnest($3::uuid[], $4::uuid[], $5::text[])
-            AS seat (order_item_id, ticket_type_id, code)`,
+     SELECT seat.order_item_id, $1, seat.ticket_type_id, seat.code, seat.attendee_name
+       FROM unnest($2::uuid[], $3::uuid[], $4::text[], $5::text[])
+            AS seat (order_item_id, ticket_type_id, code, attendee_name)`,
     [
       eventId,
-      attendeeName,
-      seats.map((seat) => seat.id),
-      seats.map((seat) => seat.ticket_type_id),
-      seats.map(() => ticketCode()),
+      seats.map((seat) => seat.item.id),
+      seats.map((seat) => seat.item.ticket_type_id),
+      seats.map((seat) => seat.code),
+      seats.map((seat) => seat.attendeeName),
     ],
   );
+  return seats;
 }
 
 ordersRouter.post('/:id/pay', requireAuth, async (req, res, next) => {
@@ -413,8 +452,17 @@ ordersRouter.post('/:id/pay', requireAuth, async (req, res, next) => {
     await withTransaction(async (client) => {
       // Locking the order makes a double click on "Pay" issue tickets once: the second
       // request waits here, then finds the order already paid.
-      const orderResult = await client.query<{ status: string; event_id: string; total: number }>(
-        `SELECT status, event_id, total FROM orders WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+      const orderResult = await client.query<{
+        status: string;
+        event_id: string;
+        event_title: string;
+        total: number;
+      }>(
+        `SELECT o.status, o.event_id, o.total, e.title AS event_title
+           FROM orders o
+           JOIN events e ON e.id = o.event_id
+          WHERE o.id = $1 AND o.user_id = $2
+          FOR UPDATE OF o`,
         [orderId, userId],
       );
       const order = orderResult.rows[0];
@@ -426,7 +474,8 @@ ordersRouter.post('/:id/pay', requireAuth, async (req, res, next) => {
       }
 
       const itemsResult = await client.query<PayItemRow>(
-        `SELECT id, ticket_type_id, quantity FROM order_items WHERE order_id = $1`,
+        `SELECT id, ticket_type_id, name, quantity, attendee_names
+           FROM order_items WHERE order_id = $1`,
         [orderId],
       );
 
@@ -465,19 +514,45 @@ ordersRouter.post('/:id/pay', requireAuth, async (req, res, next) => {
         );
       }
 
-      // SRS 4.6 wants attendee details at checkout. Until the request body has them,
-      // every ticket carries the buyer's account name (docs/api.md).
-      const userResult = await client.query<{ name: string }>(
-        `SELECT name FROM users WHERE id = $1`,
+      const userResult = await client.query<{ name: string; email: string }>(
+        `SELECT name, email FROM users WHERE id = $1`,
         [userId],
       );
-      await issueTickets(
+      const buyer = userResult.rows[0]!;
+      const seats = await issueTickets(
         client,
         orderId,
         order.event_id,
-        userResult.rows[0]!.name,
+        buyer.name,
         itemsResult.rows,
       );
+      const formattedTotal = (order.total / 100).toFixed(2);
+
+      await recordAudit(client, {
+        actorId: userId,
+        action: 'order.paid',
+        entityType: 'order',
+        entityId: orderId,
+        eventId: order.event_id,
+        description:
+          order.total > 0
+            ? `Paid ${seats.length} tickets, ${formattedTotal} KZT (simulated)`
+            : `Registered ${seats.length} free tickets`,
+      });
+
+      await sendEmail(client, {
+        userId,
+        to: buyer.email,
+        kind: 'order_confirmation',
+        subject: `Your tickets for ${order.event_title}`,
+        body: [
+          ...seats.map((seat) => `${seat.code}  ${seat.item.name}  ${seat.attendeeName}`),
+          `See them with their QR codes: ${webUrl()}/tickets`,
+          ...(order.total > 0
+            ? [`Simulated payment: ${formattedTotal} KZT. No real money was charged.`]
+            : []),
+        ].join('\n'),
+      });
     });
 
     res.json({ order: await loadOrder(orderId, userId) });
