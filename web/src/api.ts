@@ -29,6 +29,7 @@ export type EventListItem = {
 };
 
 export type EventDetail = EventListItem & {
+  paid_sales_active: boolean;
   ticket_types: TicketType[];
 };
 
@@ -67,6 +68,37 @@ export type SimulatedPayment = {
   paid_at: string;
 };
 
+export type OrderItem = {
+  ticket_type_id: string;
+  name: string;
+  quantity: number;
+  unit_price: number;
+};
+
+export type OrderTicket = {
+  id: string;
+  code: string;
+  status: 'valid' | 'checked_in' | 'cancelled' | 'refunded';
+  attendee_name: string;
+  ticket_type_name: string;
+  event: { id: string; title: string; starts_at: string; venue_name: string };
+  qr_payload: string;
+};
+
+export type Order = {
+  id: string;
+  status: 'pending' | 'paid' | 'cancelled' | 'refunded';
+  event: { id: string; title: string };
+  items: OrderItem[];
+  subtotal: number;
+  discount: number;
+  total: number;
+  created_at: string;
+  expires_at: string | null;
+  payment: SimulatedPayment | null;
+  tickets: OrderTicket[];
+};
+
 export type PaidSales = {
   event_id: string;
   status: 'inactive' | 'active';
@@ -96,11 +128,13 @@ export type StaffMember = { id: string; email: string; name: string; assigned_at
 
 export class ApiError extends Error {
   readonly status: number;
+  readonly code: string | null;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code: string | null = null) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -113,15 +147,19 @@ function unreachableMessage(): string {
   return `Could not reach the API at ${apiBase()}. From the repo root, run: docker compose up -d, npm run migrate, npm run seed, npm run dev.`;
 }
 
-async function messageFromResponse(response: Response): Promise<string> {
+async function messageFromResponse(
+  response: Response,
+): Promise<{ message: string; code: string | null }> {
   let message = `The API returned ${response.status}.`;
+  let code: string | null = null;
   try {
-    const body = (await response.json()) as { error?: { message?: string } };
+    const body = (await response.json()) as { error?: { code?: string; message?: string } };
     if (body.error?.message) message = body.error.message;
+    if (body.error?.code) code = body.error.code;
   } catch {
     // Not JSON. The status line above is enough.
   }
-  return message;
+  return { message, code };
 }
 
 async function apiGet<T>(path: string): Promise<T> {
@@ -134,7 +172,8 @@ async function apiGet<T>(path: string): Promise<T> {
   }
 
   if (!response.ok) {
-    throw new ApiError(response.status, await messageFromResponse(response));
+    const { message, code } = await messageFromResponse(response);
+    throw new ApiError(response.status, message, code);
   }
 
   return (await response.json()) as T;
@@ -151,12 +190,45 @@ async function apiSend<T>(path: string, init: RequestInit): Promise<T> {
   }
 
   if (!response.ok) {
-    throw new ApiError(response.status, await messageFromResponse(response));
+    const { message, code } = await messageFromResponse(response);
+    throw new ApiError(response.status, message, code);
   }
 
   // Successful DELETE responses have no JSON body to parse.
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
+}
+
+export async function createOrder(
+  token: string,
+  eventId: string,
+  items: { ticket_type_id: string; quantity: number }[],
+): Promise<Order> {
+  const body = await apiSend<{ order: Order }>('/api/orders', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ event_id: eventId, items }),
+  });
+  return body.order;
+}
+
+export async function getOrder(token: string, orderId: string): Promise<Order> {
+  const body = await apiSend<{ order: Order }>(`/api/orders/${encodeURIComponent(orderId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return body.order;
+}
+
+export async function payOrder(token: string, orderId: string): Promise<Order> {
+  const body = await apiSend<{ order: Order }>(
+    `/api/orders/${encodeURIComponent(orderId)}/pay`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    },
+  );
+  return body.order;
 }
 
 export function registerAccount(input: {
