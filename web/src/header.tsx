@@ -52,6 +52,12 @@ export function Header() {
                   Verify your email
                 </Link>
               ) : null}
+              <Link href="/tickets" className="text-zinc-600 hover:text-zinc-900">
+                My tickets
+              </Link>
+              <Link href="/orders" className="text-zinc-600 hover:text-zinc-900">
+                My orders
+              </Link>
               <span className="font-medium">{user.name}</span>
               <button type="button" onClick={logout} className="text-zinc-600 hover:text-zinc-900">
                 Log out
