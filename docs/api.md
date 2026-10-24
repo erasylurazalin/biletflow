@@ -47,6 +47,8 @@ POST /api/auth/login                 { email, password }       -> { user, token 
 GET  /api/auth/me                                                -> { user }
 POST /api/auth/verify-email          { token }                 -> { user }
 POST /api/auth/verify-email/resend                             -> { sent: true }
+POST /api/auth/password-reset/request  { email }               -> { sent: true }
+POST /api/auth/password-reset/confirm  { token, password }     -> { user, token }
 ```
 
 ```json
@@ -63,6 +65,13 @@ Everyone registers as `attendee` with `email_verified: false`. Registration send
 verification link that is valid for 24 hours and can be used once. `verify-email` needs
 no auth token; an invalid, expired or used link is `400 INVALID_TOKEN`. `resend` requires
 auth and sends a fresh link unless the email is already verified (`409 CONFLICT`).
+
+Password reset needs no auth. `password-reset/request` always answers `{ "sent": true }`,
+whether the account exists or not. For an existing account it sends a link that is valid
+for 1 hour. `password-reset/confirm` accepts a non-empty token and a password with the same
+rules as registration. It updates the password, verifies the email if needed and invalidates
+all other unused reset links. The link can be used once; an invalid, expired or used token is
+`400 INVALID_TOKEN`. Success returns `{ user, token }` so the client can log in immediately.
 
 Creating an organizer profile (below) is what turns a user into an `organizer`. The role
 lives in the token, so after it changes the client uses the new token: the one
@@ -92,6 +101,12 @@ email case-insensitively, newest first and limited to 50 messages:
   ]
 }
 ```
+
+`GET /api/dev/outbox?email=<email>` returns the same email items, order and 50-message
+limit for the given address, without auth. It is **development only** so a logged-out user
+can retrieve a password-reset link from the simulated inbox. Because it exposes anyone's
+emails, it returns `404 NOT_FOUND` when `NODE_ENV=production`. A missing or invalid email
+is `400` outside production.
 
 ---
 

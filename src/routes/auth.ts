@@ -22,6 +22,7 @@ export const authRouter = Router();
 // 10 rounds is ~50-100ms per hash: slow for an attacker, unnoticeable for a person.
 const BCRYPT_ROUNDS = 10;
 const VERIFY_EMAIL_TTL_MINUTES = 24 * 60;
+const RESET_PASSWORD_TTL_MINUTES = 60;
 
 // Compared against when login finds no user, so an unknown email costs the same bcrypt
 // time as a wrong password and response timing does not reveal who has an account.
@@ -76,14 +77,16 @@ async function sendVerificationEmail(client: PoolClient, user: UserRow): Promise
 // POST /api/auth/register
 // ---------------------------------------------------------------------------
 
+// bcrypt ignores everything after 72 bytes, so refuse longer passwords rather than
+// silently accepting a password that only partly counts.
+const passwordSchema = z
+  .string()
+  .min(8)
+  .refine((p) => Buffer.byteLength(p) <= 72, 'Password must be at most 72 bytes');
+
 const registerSchema = z.object({
   email: emailSchema,
-  // bcrypt ignores everything after 72 bytes, so refuse longer passwords rather than
-  // silently accepting a password that only partly counts.
-  password: z
-    .string()
-    .min(8)
-    .refine((p) => Buffer.byteLength(p) <= 72, 'Password must be at most 72 bytes'),
+  password: passwordSchema,
   name: z.string().trim().min(1).max(100),
 });
 
@@ -247,6 +250,107 @@ authRouter.post('/verify-email/resend', requireAuth, async (req, res, next) => {
       await sendVerificationEmail(client, user);
     });
     res.json({ sent: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/auth/password-reset/request
+// ---------------------------------------------------------------------------
+
+const passwordResetRequestSchema = z.object({ email: emailSchema });
+
+authRouter.post('/password-reset/request', async (req, res, next) => {
+  try {
+    const parsed = passwordResetRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      throw badRequestFrom(parsed.error);
+    }
+
+    await withTransaction(async (client) => {
+      const result = await client.query<UserRow>(
+        `SELECT id, email, name, role, email_verified_at
+           FROM users
+          WHERE lower(email) = $1`,
+        [parsed.data.email],
+      );
+      const user = result.rows[0];
+      if (!user) {
+        return;
+      }
+
+      const token = await createEmailToken(
+        client,
+        user.id,
+        'reset_password',
+        RESET_PASSWORD_TTL_MINUTES,
+      );
+      const link = `${webUrl()}/reset-password?token=${token}`;
+      await sendEmail(client, {
+        userId: user.id,
+        to: user.email,
+        kind: 'reset_password',
+        subject: 'Reset your BiletFlow password',
+        body: `Reset your BiletFlow password by opening this link:\n\n${link}\n\nThis link is valid for 1 hour. If you did not ask for this, ignore this email.`,
+      });
+    });
+
+    res.json({ sent: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/auth/password-reset/confirm
+// ---------------------------------------------------------------------------
+
+const passwordResetConfirmSchema = z.object({
+  token: z.string().trim().min(1),
+  password: passwordSchema,
+});
+
+authRouter.post('/password-reset/confirm', async (req, res, next) => {
+  try {
+    const parsed = passwordResetConfirmSchema.safeParse(req.body);
+    if (!parsed.success) {
+      throw badRequestFrom(parsed.error);
+    }
+    const { token, password } = parsed.data;
+
+    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    const user = await withTransaction(async (client) => {
+      const userId = await consumeEmailToken(client, token, 'reset_password');
+      if (!userId) {
+        throw new AppError(ErrorCode.INVALID_TOKEN, 'This link is invalid or has expired', 400);
+      }
+
+      const result = await client.query<UserRow>(
+        `UPDATE users
+            SET password_hash = $2,
+                email_verified_at = COALESCE(email_verified_at, now())
+          WHERE id = $1
+          RETURNING id, email, name, role, email_verified_at`,
+        [userId, passwordHash],
+      );
+      const updated = result.rows[0];
+      if (!updated) {
+        throw AppError.unauthorized();
+      }
+
+      await client.query(
+        `UPDATE email_tokens
+            SET used_at = now()
+          WHERE user_id = $1
+            AND purpose = 'reset_password'
+            AND used_at IS NULL`,
+        [userId],
+      );
+      return updated;
+    });
+
+    res.json({ user: toUser(user), token: signToken(user) });
   } catch (err) {
     next(err);
   }
