@@ -123,7 +123,15 @@ GET    /api/events/:id                public detail
 POST   /api/events                    organizer creates (role organizer: has a profile)
 PATCH  /api/events/:id                organizer edits
 POST   /api/events/:id/publish        draft -> published
+POST   /api/events/:id/cancel         draft or published -> cancelled
 ```
+
+- Only the event's organizer can publish or cancel it. Unknown events return
+  `404 EVENT_NOT_FOUND`; other organizers get `403`.
+- Publishing requires at least one ticket type and a future start time. Published and
+  cancelled events cannot be published again (`409 CONFLICT`).
+- Cancelling an already cancelled event returns `409 CONFLICT`. Cancellation also cancels
+  every valid ticket and every pending order. Checked-in tickets and paid orders are unchanged.
 
 ```json
 "event": {
