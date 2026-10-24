@@ -83,6 +83,8 @@ export type PayoutInput = {
   account_holder: string;
 };
 
+export type StaffMember = { id: string; email: string; name: string; assigned_at: string };
+
 export class ApiError extends Error {
   readonly status: number;
 
@@ -143,6 +145,8 @@ async function apiSend<T>(path: string, init: RequestInit): Promise<T> {
     throw new ApiError(response.status, await messageFromResponse(response));
   }
 
+  // Successful DELETE responses have no JSON body to parse.
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
@@ -211,6 +215,40 @@ export function acceptPaidSalesTerms(eventId: string, token: string): Promise<Pa
 
 export function activatePaidSales(eventId: string, token: string): Promise<PaidSales> {
   return mutatePaidSales(eventId, 'activate', token);
+}
+
+export async function listStaff(eventId: string, token: string): Promise<StaffMember[]> {
+  const body = await apiSend<{ staff: StaffMember[] }>(
+    `/api/events/${encodeURIComponent(eventId)}/staff?limit=100`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  return body.staff;
+}
+
+export async function assignStaff(
+  eventId: string,
+  email: string,
+  token: string,
+): Promise<StaffMember> {
+  const body = await apiSend<{ staff_member: StaffMember }>(
+    `/api/events/${encodeURIComponent(eventId)}/staff`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ email }),
+    },
+  );
+  return body.staff_member;
+}
+
+export async function removeStaff(eventId: string, userId: string, token: string): Promise<void> {
+  await apiSend<void>(
+    `/api/events/${encodeURIComponent(eventId)}/staff/${encodeURIComponent(userId)}`,
+    { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+  );
 }
 
 export async function verifyOrganizerIdentity(token: string): Promise<void> {
