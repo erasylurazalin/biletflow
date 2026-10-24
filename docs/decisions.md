@@ -141,3 +141,97 @@ shown.
 
 **Where.** `PROCESSING_FEE_PERCENT` in `src/routes/orders.ts`, the "Orders" section of
 `docs/api.md`, and `migrations/007_checkout_details.sql`.
+
+---
+
+## 6. The backend is Node.js, Express and TypeScript on PostgreSQL
+
+**Decision.** The backend uses Node.js, Express 5, TypeScript and PostgreSQL. The web
+app uses Next.js and the mobile app uses React Native with Expo, so one language covers
+backend, web and mobile. API types read the same everywhere.
+
+Express 5 is small and has no framework conventions to learn first. Zod validates every
+request body. Vitest with supertest runs the API tests without a real server.
+
+Orders, tickets, inventory and check-ins are relational and need transactions and
+constraints. Postgres provides row locks with `SELECT ... FOR UPDATE`, conditional
+updates so two scans of one ticket cannot both succeed, unique indexes for duplicate
+emails, and check constraints. The backend uses plain SQL with numbered migrations in
+`migrations/`, with no ORM.
+
+Deployment needs one Node process and one Postgres database. Postgres runs in Docker
+through `docker-compose.yml`.
+
+**SRS basis.**
+
+- 9: TypeScript is recommended across web and mobile and may be shared with a Node
+  backend. The section asks for a rationale covering team familiarity, development
+  speed, data model and deployment complexity.
+- 8: the demo deployment is Docker-based.
+
+**Rejected.** MongoDB, which SRS 9 allows, because the inventory and check-in rules
+rely on transactions and constraints across several tables. An ORM, because the team
+would learn its API instead of SQL. A second backend language, because SRS 9 rules out
+multiple backend implementations.
+
+**Where.** `src/`, `migrations/`, `docker-compose.yml`, `CONTRIBUTING.md`.
+
+---
+
+## 7. Encryption in transit and at rest, read for a local demo
+
+**Decision.** Passwords are hashed with bcrypt. Email verification and password reset
+tokens are stored only as sha256 hashes. Payments are simulated and take no card
+details, so no card data exists anywhere.
+
+The demo runs on localhost, where HTTPS adds nothing. In any real deployment, TLS
+terminates in front of the API at a reverse proxy or the host, and disk encryption is
+the host's job. The application does not implement either itself.
+
+**SRS basis.**
+
+- 7: sensitive information shall be encrypted in transit and at rest, passwords shall
+  use secure password hashing, and payment-card data shall not be stored directly by
+  the platform.
+- 3.2 and 4.6: payments may be simulated.
+
+**Rejected.** Building TLS or field-level encryption into the app for a demo that never
+leaves one machine.
+
+**Where.** `src/routes/auth.ts`, `src/lib/email-tokens.ts`, `src/lib/payments.ts`.
+
+---
+
+## 8. Accessibility: WCAG 2.1 AA is a target, not a certified result
+
+**Decision.** Pages use semantic HTML, including headings, `nav`, `main`, and buttons
+and links for actions. Every text field has a visible label, and the ticket quantity
+selects have an `aria-label`. Errors are shown as text,
+with `role="alert"` on the auth form. Ticket statuses are written as words, not only
+shown as colour.
+
+No formal WCAG audit has been done. WCAG 2.1 AA is a target, not a certified result.
+
+**SRS basis.**
+
+- 7: event pages should meet WCAG 2.1 AA. "Should" is read as a goal.
+
+**Rejected.** Claiming AA compliance without an audit.
+
+**Where.** `web/src/`.
+
+---
+
+## 9. No Figma file: the design lives in the code
+
+**Decision.** The team designed directly in the web app with Tailwind CSS. There is no
+Figma file. The suggested technology stack is read as suggestions.
+
+**SRS basis.**
+
+- 9: Figma and Tailwind CSS are suggested tools. The stack is "recommended for
+  consistency".
+
+**Rejected.** Drawing a Figma file after the fact.
+
+**Where.** `web/src/`.
