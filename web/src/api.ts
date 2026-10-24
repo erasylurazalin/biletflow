@@ -43,11 +43,20 @@ export type User = {
   email: string;
   name: string;
   role: 'attendee' | 'organizer' | 'event_admin' | 'platform_admin';
+  email_verified: boolean;
 };
 
 export type AuthSession = {
   user: User;
   token: string;
+};
+
+export type InboxEmail = {
+  id: string;
+  kind: string;
+  subject: string;
+  body: string;
+  created_at: string;
 };
 
 export type SimulatedPayment = {
@@ -175,6 +184,53 @@ export async function getMe(token: string): Promise<User> {
     headers: { Authorization: `Bearer ${token}` },
   });
   return body.user;
+}
+
+export async function verifyEmail(token: string): Promise<User> {
+  const body = await apiSend<{ user: User }>('/api/auth/verify-email', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  });
+  return body.user;
+}
+
+export async function resendVerification(token: string): Promise<void> {
+  await apiSend<{ sent: boolean }>('/api/auth/verify-email/resend', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function requestPasswordReset(email: string): Promise<void> {
+  await apiSend<{ sent: boolean }>('/api/auth/password-reset/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  });
+}
+
+export function confirmPasswordReset(token: string, password: string): Promise<AuthSession> {
+  return apiSend<AuthSession>('/api/auth/password-reset/confirm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, password }),
+  });
+}
+
+export async function listMyEmails(authToken: string): Promise<InboxEmail[]> {
+  const body = await apiSend<{ emails: InboxEmail[] }>('/api/me/emails', {
+    headers: { Authorization: `Bearer ${authToken}` },
+  });
+  return body.emails;
+}
+
+export async function listDevOutbox(email: string): Promise<InboxEmail[]> {
+  const body = await apiSend<{ emails: InboxEmail[] }>(
+    `/api/dev/outbox?email=${encodeURIComponent(email)}`,
+    {},
+  );
+  return body.emails;
 }
 
 export async function getPaidSales(eventId: string, token: string): Promise<PaidSales> {
