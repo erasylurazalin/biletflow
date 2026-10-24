@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ApiError, formatPrice, formatWhen, getEvent } from '@/api';
+import { ApiError, formatWhen, getEvent } from '@/api';
 import { ApiUnavailable } from '@/api-unavailable';
+import { TicketPicker } from '@/ticket-picker';
 
 export const dynamic = 'force-dynamic';
 
@@ -58,31 +59,11 @@ export default async function EventPage({
       {event.ticket_types.length === 0 ? (
         <p className="text-zinc-600">No tickets on sale.</p>
       ) : (
-        <ul className="space-y-3">
-          {event.ticket_types.map((ticket) => (
-            <li
-              key={ticket.id}
-              className="flex items-center justify-between rounded-lg border border-zinc-200 bg-white p-4"
-            >
-              <div>
-                <div className="font-medium">{ticket.name}</div>
-                <div className="text-sm text-zinc-500">
-                  {ticket.quantity_available} of {ticket.quantity_total} left
-                </div>
-              </div>
-              <div className="text-right">
-                <div className="font-medium">{formatPrice(ticket.price)}</div>
-                <button
-                  type="button"
-                  disabled
-                  className="mt-1 rounded bg-zinc-200 px-3 py-1 text-sm text-zinc-500"
-                >
-                  Buy (soon)
-                </button>
-              </div>
-            </li>
-          ))}
-        </ul>
+        <TicketPicker
+          eventId={event.id}
+          ticketTypes={event.ticket_types}
+          paidSalesActive={event.paid_sales_active}
+        />
       )}
     </div>
   );

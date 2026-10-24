@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 import { ApiError, loginAccount, registerAccount } from '@/api';
 import { saveSession } from '@/session';
@@ -11,9 +11,15 @@ const fieldClass =
 
 export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const isRegister = mode === 'register';
+  const requestedNext = searchParams.get('next');
+  // Only same-site paths: "//host" and "/\host" would send the user to another site.
+  const next = /^\/(?![/\\])/.test(requestedNext ?? '') ? requestedNext! : '/';
+  const loginHref = next === '/' ? '/login' : `/login?next=${encodeURIComponent(next)}`;
+  const registerHref = next === '/' ? '/register' : `/register?next=${encodeURIComponent(next)}`;
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -34,7 +40,7 @@ export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
           })
         : await loginAccount({ email, password });
       saveSession(session.token, session.user);
-      router.push('/');
+      router.push(next);
       router.refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.');
@@ -89,12 +95,12 @@ export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
       </button>
       <p className="mt-4 text-sm text-zinc-600">
         {isRegister ? (
-          <Link href="/login" className="hover:text-zinc-900">
+          <Link href={loginHref} className="hover:text-zinc-900">
             Already have an account? Log in
           </Link>
         ) : (
           <span className="flex gap-4">
-            <Link href="/register" className="hover:text-zinc-900">
+            <Link href={registerHref} className="hover:text-zinc-900">
               Create an account
             </Link>
             <Link href="/forgot-password" className="hover:text-zinc-900">
