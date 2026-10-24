@@ -11,6 +11,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { pool } from '../db/pool';
+import { withTransaction } from '../db/transaction';
+import { recordAudit } from '../lib/audit';
 import { AppError, ErrorCode } from '../lib/errors';
 import { requireAuth, signToken, type AuthUser } from '../middleware/auth';
 
@@ -298,21 +300,42 @@ meRouter.patch('/organizer-profile', requireAuth, async (req, res, next) => {
 // ---------------------------------------------------------------------------
 
 // SRS 3.2 step 2 for paid sales. The academic MVP simulates it (SRS 3.2 allows that), so
-// it takes nothing, stores no document numbers and always succeeds. It records when the
-// step was done, once: COALESCE keeps the first time on a repeat call.
+// it takes nothing, stores no document numbers and always succeeds. Only the first call
+// changes the profile and writes an audit entry; a repeat returns the same profile.
 meRouter.post('/organizer-profile/verify-identity', requireAuth, async (req, res, next) => {
   try {
-    const result = await pool.query<ProfileRow>(
-      `UPDATE organizer_profiles p
-          SET identity_verified_at = COALESCE(p.identity_verified_at, now())
-        WHERE p.user_id = $1
-       RETURNING ${PROFILE_COLUMNS}`,
-      [req.user!.id],
-    );
-    const row = result.rows[0];
-    if (!row) {
-      throw notFound();
-    }
+    const userId = req.user!.id;
+    const row = await withTransaction(async (client) => {
+      const result = await client.query<ProfileRow & { organizer_profile_id: string }>(
+        `UPDATE organizer_profiles p
+            SET identity_verified_at = now()
+          WHERE p.user_id = $1
+            AND p.identity_verified_at IS NULL
+         RETURNING ${PROFILE_COLUMNS}, p.id AS organizer_profile_id`,
+        [userId],
+      );
+      const verified = result.rows[0];
+      if (verified) {
+        await recordAudit(client, {
+          actorId: userId,
+          action: 'organizer_profile.identity_verified',
+          entityType: 'organizer_profile',
+          entityId: verified.organizer_profile_id,
+          description: 'Completed the simulated organizer identity check',
+        });
+        return verified;
+      }
+
+      const existing = await client.query<ProfileRow>(
+        `SELECT ${PROFILE_COLUMNS} FROM organizer_profiles p WHERE p.user_id = $1`,
+        [userId],
+      );
+      const profile = existing.rows[0];
+      if (!profile) {
+        throw notFound();
+      }
+      return profile;
+    });
 
     res.json({ organizer_profile: toProfile(row) });
   } catch (err) {

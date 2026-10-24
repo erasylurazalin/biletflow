@@ -7,7 +7,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 
-vi.mock('../db/pool', () => ({ pool: { query: vi.fn() } }));
+vi.mock('../db/pool', () => {
+  const query = vi.fn();
+  const clientQuery = vi.fn((sql: string, ...args: unknown[]) => {
+    if (/^(BEGIN|COMMIT|ROLLBACK)$/.test(sql.trim())) {
+      return Promise.resolve({ rows: [] });
+    }
+    return query(sql, ...args);
+  });
+  return {
+    pool: {
+      query,
+      connect: vi.fn(async () => ({ query: clientQuery, release: vi.fn() })),
+    },
+  };
+});
 
 import { pool } from '../db/pool';
 import { createApp } from '../app';
@@ -147,9 +161,11 @@ describe('POST /api/events/:id/paid-sales/activation-fee', () => {
       .post(`/api/events/${EVENT_ID}/paid-sales/activation-fee`)
       .set('Authorization', bearer(userId));
 
-  it('records a simulated payment of 5,000 KZT', async () => {
+  it('records a simulated payment of 5,000 KZT and its audit entry', async () => {
+    const PAYMENT_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     query
       .mockResolvedValueOnce(rows([freshRow]))
+      .mockResolvedValueOnce(rows([{ id: PAYMENT_ID }]))
       .mockResolvedValueOnce(rows([]))
       .mockResolvedValueOnce(rows([{ ...freshRow, ...feePaid }]));
 
@@ -160,9 +176,17 @@ describe('POST /api/events/:id/paid-sales/activation-fee', () => {
     expect(statements()[1]).toContain("'activation_fee'");
     expect(statements()[1]).toContain("'simulated'");
     expect(query.mock.calls[1]?.[1]).toEqual([EVENT_ID, ORGANIZER_ID, 500000]);
+    expect(query.mock.calls[2]?.[1]).toEqual([
+      ORGANIZER_ID,
+      'paid_sales.fee_paid',
+      'payment',
+      PAYMENT_ID,
+      EVENT_ID,
+      'Paid the simulated paid-sales activation fee of 5000 KZT',
+    ]);
   });
 
-  it('returns 409 CONFLICT when the fee is already paid', async () => {
+  it('returns 409 CONFLICT when the fee is already paid and writes no audit entry', async () => {
     query
       .mockResolvedValueOnce(rows([readyRow]))
       .mockRejectedValueOnce(Object.assign(new Error('duplicate key'), { code: '23505' }));
@@ -171,6 +195,7 @@ describe('POST /api/events/:id/paid-sales/activation-fee', () => {
 
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('CONFLICT');
+    expect(statements().some((sql) => sql.includes('INSERT INTO audit_log'))).toBe(false);
   });
 
   it('returns 409 CONFLICT on a cancelled event and records nothing', async () => {
@@ -228,9 +253,10 @@ describe('POST /api/events/:id/paid-sales/activate', () => {
   const activate = () =>
     request(app).post(`/api/events/${EVENT_ID}/paid-sales/activate`).set('Authorization', bearer());
 
-  it('activates when every checklist item is done', async () => {
+  it('activates when every checklist item is done and writes one audit entry', async () => {
     query
       .mockResolvedValueOnce(rows([readyRow]))
+      .mockResolvedValueOnce({ rows: [{ event_id: EVENT_ID }], rowCount: 1 } as never)
       .mockResolvedValueOnce(rows([]))
       .mockResolvedValueOnce(rows([{ ...readyRow, activated_at: ACTIVATED_AT }]));
 
@@ -240,9 +266,17 @@ describe('POST /api/events/:id/paid-sales/activate', () => {
     expect(res.body.paid_sales.status).toBe('active');
     expect(res.body.paid_sales.activated_at).toBe(ACTIVATED_AT);
     expect(statements()[1]).toMatch(/^UPDATE paid_sales_activations/);
+    expect(query.mock.calls[2]?.[1]).toEqual([
+      ORGANIZER_ID,
+      'paid_sales.activated',
+      'event',
+      EVENT_ID,
+      EVENT_ID,
+      'Activated paid sales for the event',
+    ]);
   });
 
-  it('returns 409 PAID_SALES_INCOMPLETE naming what is missing, and changes nothing', async () => {
+  it('returns 409 PAID_SALES_INCOMPLETE and writes no audit entry', async () => {
     query.mockResolvedValueOnce(rows([{ ...freshRow, payout_account: false }]));
 
     const res = await activate();
@@ -255,6 +289,7 @@ describe('POST /api/events/:id/paid-sales/activate', () => {
         'organizer profile, the activation fee, accepting the paid-event terms.',
     });
     expect(query).toHaveBeenCalledTimes(1);
+    expect(statements().some((sql) => sql.includes('INSERT INTO audit_log'))).toBe(false);
   });
 
   it('refuses an event without a paid ticket type', async () => {
@@ -266,7 +301,7 @@ describe('POST /api/events/:id/paid-sales/activate', () => {
     expect(res.body.error.message).toContain('a ticket type with a price');
   });
 
-  it('answers 200 and changes nothing when already active', async () => {
+  it('answers 200 without an update or audit entry when already active', async () => {
     const active = { ...readyRow, activated_at: ACTIVATED_AT };
     query.mockResolvedValueOnce(rows([active])).mockResolvedValueOnce(rows([active]));
 
@@ -274,5 +309,6 @@ describe('POST /api/events/:id/paid-sales/activate', () => {
 
     expect(res.status).toBe(200);
     expect(statements().some((s) => s.startsWith('UPDATE'))).toBe(false);
+    expect(statements().some((sql) => sql.includes('INSERT INTO audit_log'))).toBe(false);
   });
 });

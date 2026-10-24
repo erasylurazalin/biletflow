@@ -6,7 +6,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 
-vi.mock('../db/pool', () => ({ pool: { query: vi.fn() } }));
+vi.mock('../db/pool', () => {
+  const query = vi.fn();
+  const clientQuery = vi.fn((sql: string, ...args: unknown[]) => {
+    if (/^(BEGIN|COMMIT|ROLLBACK)$/.test(sql.trim())) {
+      return Promise.resolve({ rows: [] });
+    }
+    return query(sql, ...args);
+  });
+  return {
+    pool: {
+      query,
+      connect: vi.fn(async () => ({ query: clientQuery, release: vi.fn() })),
+    },
+  };
+});
 
 import { pool } from '../db/pool';
 import { createApp } from '../app';
@@ -291,11 +305,20 @@ describe('PATCH /api/me/organizer-profile', () => {
 });
 
 describe('POST /api/me/organizer-profile/verify-identity', () => {
-  it('records the simulated identity check and returns the profile', async () => {
+  it('records the simulated identity check and its audit entry', async () => {
     const VERIFIED_AT = '2026-10-13T12:00:00.000Z';
-    query.mockResolvedValueOnce(
-      rows([{ ...profileRow, identity_verified_at: new Date(VERIFIED_AT) }]),
-    );
+    const PROFILE_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    query
+      .mockResolvedValueOnce(
+        rows([
+          {
+            ...profileRow,
+            identity_verified_at: new Date(VERIFIED_AT),
+            organizer_profile_id: PROFILE_ID,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(rows([]));
 
     const res = await request(app)
       .post('/api/me/organizer-profile/verify-identity')
@@ -305,12 +328,34 @@ describe('POST /api/me/organizer-profile/verify-identity', () => {
     expect(res.body).toEqual({
       organizer_profile: { ...profile, identity_verified_at: VERIFIED_AT },
     });
-    // A repeat call keeps the first time.
-    expect(String(query.mock.calls[0]?.[0])).toContain('COALESCE(p.identity_verified_at, now())');
+    expect(String(query.mock.calls[0]?.[0])).toContain('p.identity_verified_at IS NULL');
+    expect(String(query.mock.calls[1]?.[0])).toContain('INSERT INTO audit_log');
+    expect(query.mock.calls[1]?.[1]).toEqual([
+      USER_ID,
+      'organizer_profile.identity_verified',
+      'organizer_profile',
+      PROFILE_ID,
+      null,
+      'Completed the simulated organizer identity check',
+    ]);
   });
 
-  it('returns 404 ORGANIZER_PROFILE_NOT_FOUND without a profile', async () => {
-    query.mockResolvedValueOnce(rows([]));
+  it('does not write another audit entry when identity is already verified', async () => {
+    query
+      .mockResolvedValueOnce(rows([]))
+      .mockResolvedValueOnce(rows([{ ...profileRow, identity_verified_at: new Date() }]));
+
+    const res = await request(app)
+      .post('/api/me/organizer-profile/verify-identity')
+      .set('Authorization', bearer('organizer'));
+
+    expect(res.status).toBe(200);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(String(query.mock.calls[0]?.[0])).not.toContain('INSERT INTO audit_log');
+  });
+
+  it('returns 404 without a profile and writes no audit entry', async () => {
+    query.mockResolvedValueOnce(rows([])).mockResolvedValueOnce(rows([]));
 
     const res = await request(app)
       .post('/api/me/organizer-profile/verify-identity')
@@ -318,6 +363,9 @@ describe('POST /api/me/organizer-profile/verify-identity', () => {
 
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe('ORGANIZER_PROFILE_NOT_FOUND');
+    expect(query.mock.calls.some((call) => String(call[0]).includes('INSERT INTO audit_log'))).toBe(
+      false,
+    );
   });
 
   it('returns 401 without a token', async () => {

@@ -103,11 +103,17 @@ describe.skipIf(!TEST_DATABASE_URL)('paid checkout against a real database', () 
     expect(early.status).toBe(409);
     expect(early.body.error.code).toBe('PAID_SALES_INACTIVE');
 
-    // Activating too soon names what is missing.
+    // Activating too soon names what is missing and writes no audit entry.
     const tooSoon = await request(app).post(`${base}/activate`).set(auth);
     expect(tooSoon.status).toBe(409);
     expect(tooSoon.body.error.code).toBe('PAID_SALES_INCOMPLETE');
     expect(tooSoon.body.error.message).toContain('identity verification');
+    const failedActivationAudits = await pool.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM audit_log
+        WHERE event_id = $1 AND action = 'paid_sales.activated'`,
+      [organizer.eventId],
+    );
+    expect(failedActivationAudits.rows[0]!.n).toBe(0);
 
     await activate(organizer.token, organizer.eventId);
 
@@ -125,6 +131,31 @@ describe.skipIf(!TEST_DATABASE_URL)('paid checkout against a real database', () 
     });
     const detail = await request(app).get(`/api/events/${organizer.eventId}`);
     expect(detail.body.event.paid_sales_active).toBe(true);
+
+    // Repeating a completed step changes nothing and adds no audit entry.
+    await request(app).post(`${base}/activate`).set(auth).expect(200);
+    await request(app).post(`${base}/activation-fee`).set(auth).expect(409);
+    const audits = await pool.query<{
+      action: string;
+      entity_type: string;
+      event_id: string | null;
+    }>(
+      `SELECT action, entity_type, event_id FROM audit_log
+        WHERE actor_id = (SELECT organizer_id FROM events WHERE id = $1)`,
+      [organizer.eventId],
+    );
+    expect(audits.rows).toHaveLength(3);
+    expect(audits.rows).toEqual(
+      expect.arrayContaining([
+        {
+          action: 'organizer_profile.identity_verified',
+          entity_type: 'organizer_profile',
+          event_id: null,
+        },
+        { action: 'paid_sales.fee_paid', entity_type: 'payment', event_id: organizer.eventId },
+        { action: 'paid_sales.activated', entity_type: 'event', event_id: organizer.eventId },
+      ]),
+    );
 
     // After activation: pending, then pay.
     const placed = await placeOrder(buyer.token, organizer.eventId, organizer.ticketTypeId, 2);

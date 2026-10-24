@@ -21,6 +21,8 @@ import { Router } from 'express';
 import type { Pool, PoolClient } from 'pg';
 import { z } from 'zod';
 import { pool } from '../db/pool';
+import { withTransaction } from '../db/transaction';
+import { recordAudit } from '../lib/audit';
 import { AppError, ErrorCode } from '../lib/errors';
 import { PAYMENT_COLUMNS, toPayment, type PaymentColumns } from '../lib/payments';
 import { requireAuth } from '../middleware/auth';
@@ -162,29 +164,44 @@ paidSalesRouter.post(
     try {
       const eventId = parseEventId(req.params);
       const userId = req.user!.id;
-      const before = await loadOwnPaidSales(pool, eventId, userId);
-      assertNotCancelled(before);
+      const paidSales = await withTransaction(async (client) => {
+        const before = await loadOwnPaidSales(client, eventId, userId);
+        assertNotCancelled(before);
 
-      // SRS 4.5: the system records payment of the activation fee. Simulated, so it
-      // always succeeds. Paying twice is refused by the unique index, which also covers
-      // two clicks racing each other.
-      try {
-        await pool.query(
-          `INSERT INTO payments (purpose, event_id, paid_by, amount, method)
-           VALUES ('activation_fee', $1, $2, $3, 'simulated')`,
-          [eventId, userId, ACTIVATION_FEE],
-        );
-      } catch (err) {
-        if ((err as { code?: string }).code === PG_UNIQUE_VIOLATION) {
-          throw AppError.conflict(
-            ErrorCode.CONFLICT,
-            'The activation fee for this event is already paid',
+        // SRS 4.5: the system records payment of the activation fee. Simulated, so it
+        // always succeeds. Paying twice is refused by the unique index, which also covers
+        // two clicks racing each other.
+        let payment;
+        try {
+          const result = await client.query<{ id: string }>(
+            `INSERT INTO payments (purpose, event_id, paid_by, amount, method)
+             VALUES ('activation_fee', $1, $2, $3, 'simulated')
+             RETURNING id`,
+            [eventId, userId, ACTIVATION_FEE],
           );
+          payment = result.rows[0]!;
+        } catch (err) {
+          if ((err as { code?: string }).code === PG_UNIQUE_VIOLATION) {
+            throw AppError.conflict(
+              ErrorCode.CONFLICT,
+              'The activation fee for this event is already paid',
+            );
+          }
+          throw err;
         }
-        throw err;
-      }
 
-      res.json({ paid_sales: toPaidSales(await loadOwnPaidSales(pool, eventId, userId)) });
+        await recordAudit(client, {
+          actorId: userId,
+          action: 'paid_sales.fee_paid',
+          entityType: 'payment',
+          entityId: payment.id,
+          eventId,
+          description: 'Paid the simulated paid-sales activation fee of 5000 KZT',
+        });
+        return loadOwnPaidSales(client, eventId, userId);
+      });
+
+      res.json({ paid_sales: toPaidSales(paidSales) });
     } catch (err) {
       next(err);
     }
@@ -233,34 +250,51 @@ paidSalesRouter.post('/events/:id/paid-sales/activate', requireAuth, async (req,
   try {
     const eventId = parseEventId(req.params);
     const userId = req.user!.id;
-    const before = await loadOwnPaidSales(pool, eventId, userId);
-    assertNotCancelled(before);
+    const paidSales = await withTransaction(async (client) => {
+      const before = await loadOwnPaidSales(client, eventId, userId);
+      assertNotCancelled(before);
 
-    // Already active: nothing to do, and not an error.
-    if (before.activated_at === null) {
-      // SRS 4.5: the system verifies the requirements are complete, at this moment.
-      const checklist = checklistOf(before);
-      const missing = (Object.keys(checklist) as (keyof typeof checklist)[])
-        .filter((key) => !checklist[key])
-        .map((key) => MISSING_LABELS[key]);
-      if (missing.length > 0) {
-        throw AppError.conflict(
-          ErrorCode.PAID_SALES_INCOMPLETE,
-          `Paid sales cannot be activated yet. Still missing: ${missing.join(', ')}.`,
+      // Already active: nothing to do, and not an error.
+      if (before.activated_at === null) {
+        // SRS 4.5: the system verifies the requirements are complete, at this moment.
+        const checklist = checklistOf(before);
+        const missing = (Object.keys(checklist) as (keyof typeof checklist)[])
+          .filter((key) => !checklist[key])
+          .map((key) => MISSING_LABELS[key]);
+        if (missing.length > 0) {
+          throw AppError.conflict(
+            ErrorCode.PAID_SALES_INCOMPLETE,
+            `Paid sales cannot be activated yet. Still missing: ${missing.join(', ')}.`,
+          );
+        }
+
+        // The UPDATE decides which concurrent request activated the event. Only that
+        // request writes an audit entry. terms_accepted means the row already exists.
+        const activated = await client.query(
+          `UPDATE paid_sales_activations
+              SET activated_at = now(),
+                  activated_by = $2
+            WHERE event_id = $1
+              AND activated_at IS NULL
+           RETURNING event_id`,
+          [eventId, userId],
         );
+        if (activated.rowCount === 1) {
+          await recordAudit(client, {
+            actorId: userId,
+            action: 'paid_sales.activated',
+            entityType: 'event',
+            entityId: eventId,
+            eventId,
+            description: 'Activated paid sales for the event',
+          });
+        }
       }
 
-      // terms_accepted is on the checklist, so the row exists by now.
-      await pool.query(
-        `UPDATE paid_sales_activations
-            SET activated_at = COALESCE(activated_at, now()),
-                activated_by = COALESCE(activated_by, $2)
-          WHERE event_id = $1`,
-        [eventId, userId],
-      );
-    }
+      return loadOwnPaidSales(client, eventId, userId);
+    });
 
-    res.json({ paid_sales: toPaidSales(await loadOwnPaidSales(pool, eventId, userId)) });
+    res.json({ paid_sales: toPaidSales(paidSales) });
   } catch (err) {
     next(err);
   }

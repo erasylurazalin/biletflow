@@ -50,6 +50,39 @@ export type AuthSession = {
   token: string;
 };
 
+export type SimulatedPayment = {
+  method: 'simulated';
+  is_demonstration: boolean;
+  amount: number;
+  currency: string;
+  paid_at: string;
+};
+
+export type PaidSales = {
+  event_id: string;
+  status: 'inactive' | 'active';
+  checklist: {
+    paid_ticket_type: boolean;
+    identity_verified: boolean;
+    payout_account: boolean;
+    activation_fee_paid: boolean;
+    terms_accepted: boolean;
+  };
+  activation_fee: {
+    amount: number;
+    currency: string;
+    payment: SimulatedPayment | null;
+  };
+  terms_accepted_at: string | null;
+  activated_at: string | null;
+};
+
+export type PayoutInput = {
+  bank_name: string;
+  iban: string;
+  account_holder: string;
+};
+
 export class ApiError extends Error {
   readonly status: number;
 
@@ -138,6 +171,64 @@ export async function getMe(token: string): Promise<User> {
     headers: { Authorization: `Bearer ${token}` },
   });
   return body.user;
+}
+
+export async function getPaidSales(eventId: string, token: string): Promise<PaidSales> {
+  const body = await apiSend<{ paid_sales: PaidSales }>(
+    `/api/events/${encodeURIComponent(eventId)}/paid-sales`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  return body.paid_sales;
+}
+
+async function mutatePaidSales(
+  eventId: string,
+  step: 'activation-fee' | 'terms' | 'activate',
+  token: string,
+  input?: { accepted: true },
+): Promise<PaidSales> {
+  const body = await apiSend<{ paid_sales: PaidSales }>(
+    `/api/events/${encodeURIComponent(eventId)}/paid-sales/${step}`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(input ?? {}),
+    },
+  );
+  return body.paid_sales;
+}
+
+export function payActivationFee(eventId: string, token: string): Promise<PaidSales> {
+  return mutatePaidSales(eventId, 'activation-fee', token);
+}
+
+export function acceptPaidSalesTerms(eventId: string, token: string): Promise<PaidSales> {
+  return mutatePaidSales(eventId, 'terms', token, { accepted: true });
+}
+
+export function activatePaidSales(eventId: string, token: string): Promise<PaidSales> {
+  return mutatePaidSales(eventId, 'activate', token);
+}
+
+export async function verifyOrganizerIdentity(token: string): Promise<void> {
+  await apiSend('/api/me/organizer-profile/verify-identity', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function savePayoutAccount(token: string, payout: PayoutInput): Promise<void> {
+  await apiSend('/api/me/organizer-profile', {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ payout }),
+  });
 }
 
 export async function listEvents(): Promise<EventListItem[]> {
