@@ -93,9 +93,14 @@ export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
             Already have an account? Log in
           </Link>
         ) : (
-          <Link href="/register" className="hover:text-zinc-900">
-            Create an account
-          </Link>
+          <span className="flex gap-4">
+            <Link href="/register" className="hover:text-zinc-900">
+              Create an account
+            </Link>
+            <Link href="/forgot-password" className="hover:text-zinc-900">
+              Forgot password?
+            </Link>
+          </span>
         )}
       </p>
     </form>

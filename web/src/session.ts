@@ -43,6 +43,7 @@ function parseUser(raw: string | null): User | null {
         email: parsed.email,
         name: parsed.name,
         role: parsed.role,
+        email_verified: parsed.email_verified === true,
       };
     }
   } catch {

@@ -47,6 +47,11 @@ export function Header() {
         <nav aria-label="Account" className="ml-auto flex h-9 items-center gap-4 text-sm">
           {user ? (
             <>
+              {user.email_verified === false ? (
+                <Link href="/inbox" className="text-zinc-600 hover:text-zinc-900">
+                  Verify your email
+                </Link>
+              ) : null}
               <span className="font-medium">{user.name}</span>
               <button type="button" onClick={logout} className="text-zinc-600 hover:text-zinc-900">
                 Log out
