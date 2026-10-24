@@ -85,6 +85,8 @@ export type OrderTicket = {
   qr_payload: string;
 };
 
+export type Ticket = OrderTicket;
+
 export type Order = {
   id: string;
   status: 'pending' | 'paid' | 'cancelled' | 'refunded';
@@ -98,6 +100,8 @@ export type Order = {
   payment: SimulatedPayment | null;
   tickets: OrderTicket[];
 };
+
+export type OrderListItem = Omit<Order, 'tickets'>;
 
 export type PaidSales = {
   event_id: string;
@@ -210,6 +214,20 @@ export async function createOrder(
     body: JSON.stringify({ event_id: eventId, items }),
   });
   return body.order;
+}
+
+export async function listMyTickets(token: string): Promise<Ticket[]> {
+  const body = await apiSend<{ tickets: Ticket[] }>('/api/tickets?limit=100', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return body.tickets;
+}
+
+export async function listMyOrders(token: string): Promise<OrderListItem[]> {
+  const body = await apiSend<{ orders: OrderListItem[] }>('/api/orders?limit=100', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return body.orders;
 }
 
 export async function getOrder(token: string, orderId: string): Promise<Order> {
