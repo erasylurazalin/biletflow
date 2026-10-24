@@ -11,6 +11,7 @@
 import express from 'express';
 import { authRouter } from './routes/auth';
 import { checkInRouter } from './routes/check-in';
+import { devRouter } from './routes/dev';
 import { eventsRouter } from './routes/events';
 import { meRouter } from './routes/me';
 import { ordersRouter } from './routes/orders';
@@ -39,6 +40,7 @@ export function createApp() {
   app.use('/api', staffRouter);
   app.use('/api', checkInRouter);
   app.use('/api', paidSalesRouter);
+  app.use('/api', devRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

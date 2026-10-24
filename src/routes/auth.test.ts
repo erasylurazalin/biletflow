@@ -240,6 +240,96 @@ describe('POST /api/auth/verify-email/resend', () => {
   });
 });
 
+describe('POST /api/auth/password-reset/request', () => {
+  it('answers 200 for an unknown email and sends nothing', async () => {
+    query.mockResolvedValueOnce(rows([]));
+
+    const res = await request(app)
+      .post('/api/auth/password-reset/request')
+      .send({ email: 'nobody@example.kz' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ sent: true });
+    expect(query).toHaveBeenCalledOnce();
+    expect(String(query.mock.calls[0]?.[0])).not.toContain('INSERT INTO email_outbox');
+  });
+
+  it('sends a reset email for a known email', async () => {
+    query.mockResolvedValueOnce(rows([userRow]));
+
+    const res = await request(app)
+      .post('/api/auth/password-reset/request')
+      .send({ email: 'AIDOS@example.kz' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ sent: true });
+    expect(query.mock.calls[0]?.[1]).toEqual(['aidos@example.kz']);
+    expect(String(query.mock.calls[1]?.[0])).toContain('INSERT INTO email_tokens');
+    expect(query.mock.calls[1]?.[1]?.[1]).toBe('reset_password');
+    expect(query.mock.calls[1]?.[1]?.[3]).toBe(60);
+    expect(String(query.mock.calls[2]?.[0])).toContain('INSERT INTO email_outbox');
+    const outboxParams = query.mock.calls[2]?.[1] as unknown as string[];
+    expect(outboxParams.slice(0, 4)).toEqual([
+      userRow.id,
+      userRow.email,
+      'reset_password',
+      'Reset your BiletFlow password',
+    ]);
+    expect(outboxParams[4]).toContain('http://localhost:3001/reset-password?token=');
+    expect(outboxParams[4]).toContain(
+      'This link is valid for 1 hour. If you did not ask for this, ignore this email.',
+    );
+  });
+});
+
+describe('POST /api/auth/password-reset/confirm', () => {
+  it('returns 400 INVALID_TOKEN for a bad token', async () => {
+    query.mockResolvedValueOnce(rows([]));
+
+    const res = await request(app)
+      .post('/api/auth/password-reset/confirm')
+      .send({ token: 'bad-token', password: 'correct-horse' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: { code: 'INVALID_TOKEN', message: 'This link is invalid or has expired' },
+    });
+    expect(query).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a short password without touching the database', async () => {
+    const res = await request(app)
+      .post('/api/auth/password-reset/confirm')
+      .send({ token: 'good-token', password: 'short' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('updates the password and returns the user and a token', async () => {
+    const verifiedAt = new Date('2026-10-25T10:00:00.000Z');
+    query
+      .mockResolvedValueOnce(rows([{ user_id: userRow.id }]))
+      .mockResolvedValueOnce(rows([{ ...userRow, email_verified_at: verifiedAt }]))
+      .mockResolvedValueOnce(rows([]));
+
+    const res = await request(app)
+      .post('/api/auth/password-reset/confirm')
+      .send({ token: 'good-token', password: 'new-password' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.user).toEqual({ ...publicUser, email_verified: true });
+    expect(jwt.verify(res.body.token, 'test-jwt-secret')).toMatchObject({ id: userRow.id });
+    const [userId, hash] = query.mock.calls[1]?.[1] as unknown as [string, string];
+    expect(userId).toBe(userRow.id);
+    expect(await bcrypt.compare('new-password', hash)).toBe(true);
+    expect(String(query.mock.calls[1]?.[0])).toContain('COALESCE(email_verified_at, now())');
+    expect(String(query.mock.calls[2]?.[0])).toContain("purpose = 'reset_password'");
+    expect(query.mock.calls[2]?.[1]).toEqual([userRow.id]);
+  });
+});
+
 describe('GET /api/auth/me', () => {
   it('returns 401 without a token', async () => {
     const res = await request(app).get('/api/auth/me');
