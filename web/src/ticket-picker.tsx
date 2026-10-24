@@ -30,6 +30,7 @@ export function TicketPicker({
 }) {
   const router = useRouter();
   const [quantities, setQuantities] = useState<Record<string, number>>({});
+  const [attendeeNames, setAttendeeNames] = useState<Record<string, string[]>>({});
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -54,7 +55,21 @@ export function TicketPicker({
 
     const items = ticketTypes.flatMap((ticket) => {
       const quantity = quantities[ticket.id] ?? 0;
-      return quantity > 0 ? [{ ticket_type_id: ticket.id, quantity }] : [];
+      const savedNames = attendeeNames[ticket.id] ?? [];
+      const names = Array.from(
+        { length: quantity },
+        (_, index) => savedNames[index]?.trim() ?? '',
+      );
+      const allNamed = names.every((name) => name.length > 0);
+      return quantity > 0
+        ? [
+            {
+              ticket_type_id: ticket.id,
+              quantity,
+              ...(allNamed && { attendee_names: names }),
+            },
+          ]
+        : [];
     });
 
     setError(null);
@@ -115,6 +130,33 @@ export function TicketPicker({
           );
         })}
       </ul>
+      {selectedCount >= 1 && selectedCount <= 10 ? (
+        <div className="mt-5 space-y-3">
+          {ticketTypes.flatMap((ticket) =>
+            Array.from({ length: quantities[ticket.id] ?? 0 }, (_, index) => (
+              <label key={`${ticket.id}-${index}`} className="block text-sm">
+                <span className="mb-1 block font-medium">
+                  {ticket.name}, ticket {index + 1}: attendee name
+                </span>
+                <input
+                  type="text"
+                  maxLength={100}
+                  placeholder="Your name"
+                  value={attendeeNames[ticket.id]?.[index] ?? ''}
+                  onChange={(event) =>
+                    setAttendeeNames((current) => {
+                      const names = [...(current[ticket.id] ?? [])];
+                      names[index] = event.target.value;
+                      return { ...current, [ticket.id]: names };
+                    })
+                  }
+                  className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2"
+                />
+              </label>
+            )),
+          )}
+        </div>
+      ) : null}
       <div className="mt-5 flex flex-wrap items-center gap-4">
         <p className="font-medium">Total: {formatPrice(total)}</p>
         <button
