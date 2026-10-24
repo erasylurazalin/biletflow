@@ -333,7 +333,11 @@ describe('POST /api/orders', () => {
 });
 
 describe('POST /api/orders/:id/pay', () => {
-  const pay = () => request(app).post(`/api/orders/${ORDER_ID}/pay`).set('Authorization', bearer());
+  const pay = (simulateFailure = false) =>
+    request(app)
+      .post(`/api/orders/${ORDER_ID}/pay`)
+      .set('Authorization', bearer())
+      .send({ simulate_failure: simulateFailure });
 
   const paidOrderRow = {
     ...orderRow,
@@ -367,9 +371,9 @@ describe('POST /api/orders/:id/pay', () => {
       ],
       [],
       [{ expired: false }],
-      [],
-      [],
       [{ name: 'Aidos K.', email: 'buyer@example.kz' }],
+      [],
+      [],
       [],
       [],
       [],
@@ -420,7 +424,66 @@ describe('POST /api/orders/:id/pay', () => {
     ]);
   });
 
-  it('records no payment for a free order', async () => {
+  it('returns 402 without tickets or payment when failure is simulated, after committing the notice', async () => {
+    answer(
+      [
+        {
+          status: 'pending',
+          event_id: EVENT_ID,
+          event_title: 'Astana Tech Meetup',
+          total: 1030000,
+          expires_at: EXPIRES_AT,
+        },
+      ],
+      [
+        {
+          id: 'item',
+          ticket_type_id: TT_EARLY_ID,
+          name: 'Early Bird',
+          quantity: 2,
+          attendee_names: null,
+        },
+      ],
+      [],
+      [{ expired: false }],
+      [{ name: 'Aidos K.', email: 'buyer@example.kz' }],
+      [],
+      [],
+    );
+
+    const res = await pay(true);
+
+    expect(res.status).toBe(402);
+    expect(res.body.error).toEqual({
+      code: 'PAYMENT_FAILED',
+      message: 'The simulated payment failed. No money was taken. You can try again.',
+    });
+    expect(statements().some((s) => s.startsWith('INSERT INTO tickets'))).toBe(false);
+    expect(statements().some((s) => s.startsWith('INSERT INTO payments'))).toBe(false);
+    expect(statements()).toContain('COMMIT');
+    expect(statements()).not.toContain('ROLLBACK');
+    const audit = query.mock.calls.find((call) => sqlOf(call).startsWith('INSERT INTO audit_log'));
+    expect(audit?.[1]).toEqual([
+      BUYER_ID,
+      'order.payment_failed',
+      'order',
+      ORDER_ID,
+      EVENT_ID,
+      'Simulated payment of 10300.00 KZT failed',
+    ]);
+    const email = query.mock.calls.find((call) =>
+      sqlOf(call).startsWith('INSERT INTO email_outbox'),
+    );
+    expect(email?.[1]).toEqual([
+      BUYER_ID,
+      'buyer@example.kz',
+      'payment_failed',
+      'Your BiletFlow payment did not go through',
+      `The simulated payment for Astana Tech Meetup failed. No money was taken. Your seats stay reserved until ${EXPIRES_AT} so you can try again at http://localhost:3001/orders/${ORDER_ID}.`,
+    ]);
+  });
+
+  it('ignores simulated failure and records no payment for a free order', async () => {
     answer(
       [{ status: 'pending', event_id: EVENT_ID, event_title: 'Astana Tech Meetup', total: 0 }],
       [
@@ -434,19 +497,21 @@ describe('POST /api/orders/:id/pay', () => {
       ],
       [],
       [{ expired: false }],
-      [],
       [{ name: 'Aidos K.', email: 'buyer@example.kz' }],
+      [],
       [],
       [],
       [],
     );
     answerLoadOrder({ ...orderRow, status: 'paid', subtotal: 0, processing_fee: 0, total: 0 });
 
-    const res = await pay();
+    const res = await pay(true);
 
     expect(res.status).toBe(200);
     expect(res.body.order.payment).toBeNull();
+    expect(res.body.order.tickets).toEqual([]);
     expect(statements().some((s) => s.startsWith('INSERT INTO payments'))).toBe(false);
+    expect(statements().some((s) => s.startsWith('INSERT INTO tickets'))).toBe(true);
   });
 
   it("returns 404 ORDER_NOT_FOUND for somebody else's order", async () => {

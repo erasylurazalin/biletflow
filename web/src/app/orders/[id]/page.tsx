@@ -50,7 +50,7 @@ function Checkout() {
     };
   }, [loginPath, orderId, router]);
 
-  async function pay() {
+  async function pay(simulateFailure = false) {
     if (pending) return;
     const token = readToken();
     if (!token) {
@@ -62,7 +62,7 @@ function Checkout() {
     setExpired(false);
     setPending(true);
     try {
-      setOrder(await payOrder(token, orderId));
+      setOrder(await payOrder(token, orderId, simulateFailure));
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         clearSession();
@@ -117,7 +117,13 @@ function Checkout() {
           </li>
         ))}
       </ul>
-      <p className="mt-4 text-lg font-semibold">Total: {formatPrice(order.total)}</p>
+      <div className="mt-4 space-y-1 text-sm">
+        <p>Tickets: {formatPrice(order.subtotal)}</p>
+        {order.processing_fee > 0 ? (
+          <p>Processing charge (3%): {formatPrice(order.processing_fee)}</p>
+        ) : null}
+        <p className="pt-1 text-lg font-semibold">Total: {formatPrice(order.total)}</p>
+      </div>
 
       {error ? (
         <p role="alert" className="mt-4 rounded-md bg-red-50 p-3 text-sm text-red-700">
@@ -147,6 +153,16 @@ function Checkout() {
                 ? 'Confirm registration'
                 : `Pay ${formatPrice(order.total)} (simulated)`}
           </button>
+          {order.total > 0 ? (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => void pay(true)}
+              className="mt-2 block rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 disabled:opacity-60"
+            >
+              Simulate a failed payment
+            </button>
+          ) : null}
         </section>
       ) : null}
 

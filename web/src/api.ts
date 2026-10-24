@@ -94,6 +94,7 @@ export type Order = {
   items: OrderItem[];
   subtotal: number;
   discount: number;
+  processing_fee: number;
   total: number;
   created_at: string;
   expires_at: string | null;
@@ -206,7 +207,7 @@ async function apiSend<T>(path: string, init: RequestInit): Promise<T> {
 export async function createOrder(
   token: string,
   eventId: string,
-  items: { ticket_type_id: string; quantity: number }[],
+  items: { ticket_type_id: string; quantity: number; attendee_names?: string[] }[],
 ): Promise<Order> {
   const body = await apiSend<{ order: Order }>('/api/orders', {
     method: 'POST',
@@ -237,13 +238,17 @@ export async function getOrder(token: string, orderId: string): Promise<Order> {
   return body.order;
 }
 
-export async function payOrder(token: string, orderId: string): Promise<Order> {
+export async function payOrder(
+  token: string,
+  orderId: string,
+  simulateFailure = false,
+): Promise<Order> {
   const body = await apiSend<{ order: Order }>(
     `/api/orders/${encodeURIComponent(orderId)}/pay`,
     {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify(simulateFailure ? { simulate_failure: true } : {}),
     },
   );
   return body.order;

@@ -264,7 +264,7 @@ door staff go to other people's events too.
 POST /api/orders          { event_id, items: [{ ticket_type_id, quantity, attendee_names? }] }
                           -> { order }   // status: "pending"
 
-POST /api/orders/:id/pay  { }            // simulated payment
+POST /api/orders/:id/pay  { simulate_failure? } // simulated payment
                           -> { order }   // status: "paid", tickets issued
 
 GET  /api/orders                         // my orders
@@ -355,6 +355,12 @@ All four need a token.
   `order_confirmation` email. It lists every ticket code, type and attendee name, and
   links to `/tickets` for the QR codes. A paid order also states the simulated total and
   that no real money was charged.
+- The optional boolean `simulate_failure` demonstrates a failed payment when `total` is
+  above `0`. The response is `402 PAYMENT_FAILED`, the order stays pending, and no
+  tickets or payment are created. The committed `order.payment_failed` audit entry and
+  `payment_failed` email explain that no money was taken and link back to the order so
+  the buyer can try again. The flag is ignored for a free order. Other body fields are
+  ignored.
 - `GET /api/orders` ("my orders") uses the list envelope: `{ orders, limit, offset }`,
   newest first, every status. List items leave out `tickets`; `GET /api/orders/:id`
   has them.

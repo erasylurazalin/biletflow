@@ -5,10 +5,11 @@
  * pending order. POST /api/orders/:id/pay marks it paid and issues one ticket per seat.
  * A free order goes through the same two steps with a total of 0.
  *
- * Payment is simulated (SRS 3.2, 4.6): /pay takes no card details and always succeeds on
- * a pending order. When the total is above 0 it records a demonstration payment, which
- * the order shows as `payment` (src/lib/payments.ts). Paid ticket types can only be
- * ordered once the event's paid sales are active (routes/paid-sales.ts).
+ * Payment is simulated (SRS 3.2, 4.6): /pay takes no card details. A pending order can
+ * request a simulated failure, which keeps it pending but records the failure and email.
+ * Successful payment above 0 records a demonstration payment, which the order shows as
+ * `payment` (src/lib/payments.ts). Paid ticket types can only be ordered once the event's
+ * paid sales are active (routes/paid-sales.ts).
  *
  * Inventory is never stored (migration 001). Seats are "held" by paid orders and by
  * pending orders that have not expired (HELD_SQL), so an expired order gives its seats
@@ -440,16 +441,22 @@ async function issueTickets(
   return seats;
 }
 
+const paySchema = z.object({ simulate_failure: z.boolean().optional() });
+
 ordersRouter.post('/:id/pay', requireAuth, async (req, res, next) => {
   try {
     const parsed = idParamSchema.safeParse(req.params);
     if (!parsed.success) {
       throw AppError.badRequest('Order id must be a UUID');
     }
+    const parsedBody = paySchema.safeParse(req.body ?? {});
+    if (!parsedBody.success) {
+      throw badRequestFrom(parsedBody.error, 'payment field');
+    }
     const orderId = parsed.data.id;
     const userId = req.user!.id;
 
-    await withTransaction(async (client) => {
+    const paymentFailed = await withTransaction(async (client) => {
       // Locking the order makes a double click on "Pay" issue tickets once: the second
       // request waits here, then finds the order already paid.
       const orderResult = await client.query<{
@@ -457,8 +464,9 @@ ordersRouter.post('/:id/pay', requireAuth, async (req, res, next) => {
         event_id: string;
         event_title: string;
         total: number;
+        expires_at: Date;
       }>(
-        `SELECT o.status, o.event_id, o.total, e.title AS event_title
+        `SELECT o.status, o.event_id, o.total, o.expires_at, e.title AS event_title
            FROM orders o
            JOIN events e ON e.id = o.event_id
           WHERE o.id = $1 AND o.user_id = $2
@@ -500,6 +508,32 @@ ordersRouter.post('/:id/pay', requireAuth, async (req, res, next) => {
         );
       }
 
+      const userResult = await client.query<{ name: string; email: string }>(
+        `SELECT name, email FROM users WHERE id = $1`,
+        [userId],
+      );
+      const buyer = userResult.rows[0]!;
+      const formattedTotal = (order.total / 100).toFixed(2);
+
+      if (parsedBody.data.simulate_failure && order.total > 0) {
+        await recordAudit(client, {
+          actorId: userId,
+          action: 'order.payment_failed',
+          entityType: 'order',
+          entityId: orderId,
+          eventId: order.event_id,
+          description: `Simulated payment of ${formattedTotal} KZT failed`,
+        });
+        await sendEmail(client, {
+          userId,
+          to: buyer.email,
+          kind: 'payment_failed',
+          subject: 'Your BiletFlow payment did not go through',
+          body: `The simulated payment for ${order.event_title} failed. No money was taken. Your seats stay reserved until ${new Date(order.expires_at).toISOString()} so you can try again at ${webUrl()}/orders/${orderId}.`,
+        });
+        return true;
+      }
+
       // A paid order never expires, so expires_at goes (the seeded paid order agrees).
       await client.query(`UPDATE orders SET status = 'paid', expires_at = NULL WHERE id = $1`, [
         orderId,
@@ -514,11 +548,6 @@ ordersRouter.post('/:id/pay', requireAuth, async (req, res, next) => {
         );
       }
 
-      const userResult = await client.query<{ name: string; email: string }>(
-        `SELECT name, email FROM users WHERE id = $1`,
-        [userId],
-      );
-      const buyer = userResult.rows[0]!;
       const seats = await issueTickets(
         client,
         orderId,
@@ -526,7 +555,6 @@ ordersRouter.post('/:id/pay', requireAuth, async (req, res, next) => {
         buyer.name,
         itemsResult.rows,
       );
-      const formattedTotal = (order.total / 100).toFixed(2);
 
       await recordAudit(client, {
         actorId: userId,
@@ -553,8 +581,16 @@ ordersRouter.post('/:id/pay', requireAuth, async (req, res, next) => {
             : []),
         ].join('\n'),
       });
+      return false;
     });
 
+    if (paymentFailed) {
+      throw new AppError(
+        ErrorCode.PAYMENT_FAILED,
+        'The simulated payment failed. No money was taken. You can try again.',
+        402,
+      );
+    }
     res.json({ order: await loadOrder(orderId, userId) });
   } catch (err) {
     next(err);
