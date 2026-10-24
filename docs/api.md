@@ -467,6 +467,53 @@ All validation is server-side. The phone decides nothing.
 
 ---
 
+## Audit log
+
+Not an endpoint yet. Every organizer, admin, payment and refund action writes one entry
+(SRS 4.9, 4.16, 7), and the event timeline (#62) will read them. Write entries with
+`recordAudit(client, entry)` from `src/lib/audit.ts`, using the transaction client, so
+the entry and the change commit or roll back together. Entries can't be edited or
+deleted: the table refuses both.
+
+An entry has a timestamp, the acting user (null for the system), an action, the entity
+it's about, the event when there is one, and a short English description like
+`"Price changed from 5000 to 6000 KZT"`.
+
+Use these action names and no others. A new one goes into this table and into
+`AUDIT_ACTIONS` in `src/lib/audit.ts`, in the same PR.
+
+| Action                                | Entity            | When                                                            |
+| ------------------------------------- | ----------------- | --------------------------------------------------------------- |
+| `event.created`                       | event             | an organizer creates an event                                   |
+| `event.updated`                       | event             | an organizer edits event details                                |
+| `event.published`                     | event             | a draft goes live                                               |
+| `event.cancelled`                     | event             | an organizer cancels the event                                  |
+| `event.deleted`                       | event             | a draft is deleted                                              |
+| `event.duplicated`                    | event             | a past event is copied into a new draft (entity is the new one) |
+| `event.suspended`                     | event             | a platform admin suspends the event                             |
+| `event.unsuspended`                   | event             | a platform admin lifts the suspension                           |
+| `ticket_type.created`                 | ticket_type       | a ticket type is added                                          |
+| `ticket_type.updated`                 | ticket_type       | price, capacity or sale dates change                            |
+| `ticket_type.deleted`                 | ticket_type       | a ticket type is removed                                        |
+| `staff.assigned`                      | user              | someone is put on the door (entity is that user)                |
+| `staff.removed`                       | user              | someone is taken off the door                                   |
+| `organizer_profile.identity_verified` | organizer_profile | the simulated identity check passes (no event)                  |
+| `paid_sales.fee_paid`                 | payment           | the activation fee is paid                                      |
+| `paid_sales.activated`                | event             | paid sales are switched on                                      |
+| `order.paid`                          | order             | an order is paid, or a free one confirmed                       |
+| `order.payment_failed`                | order             | a simulated payment fails                                       |
+| `order.cancelled`                     | order             | an order is cancelled, by a person or by expiring (actor null)  |
+| `order.refunded`                      | order             | an organizer refunds an order                                   |
+| `ticket.checked_in`                   | ticket            | a ticket is scanned at the door                                 |
+| `ticket.check_in_reversed`            | ticket            | a check-in is undone                                            |
+| `promo_code.created`                  | promo_code        | a promo code is created                                         |
+| `promo_code.disabled`                 | promo_code        | a promo code is switched off                                    |
+| `support_case.status_changed`         | support_case      | a support case changes status                                   |
+| `user.suspended`                      | user              | a platform admin suspends an account (no event)                 |
+| `user.unsuspended`                    | user              | a platform admin lifts it                                       |
+
+---
+
 ## Not specified yet
 
 Promo codes, seat maps, support chat, analytics, refunds. We add these when we
