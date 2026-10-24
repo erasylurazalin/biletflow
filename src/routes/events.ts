@@ -25,6 +25,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { pool } from '../db/pool';
+import { withTransaction } from '../db/transaction';
+import { recordAudit } from '../lib/audit';
 import { AppError, ErrorCode } from '../lib/errors';
 import { requireAuth } from '../middleware/auth';
 
@@ -420,6 +422,169 @@ eventsRouter.patch('/:id', requireAuth, async (req, res, next) => {
         organizer: { id: event.organizer_id, name: owner.organizer_name },
       },
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/events/:id/publish  - organizer publishes their own draft
+// ---------------------------------------------------------------------------
+
+interface EventMutationRow extends EventDetailRow {
+  organizer_name: string;
+  start_time_passed: boolean;
+}
+
+function toOwnedEvent(event: EventDetailRow, organizerName: string) {
+  return {
+    id: event.id,
+    title: event.title,
+    description: event.description,
+    venue_name: event.venue_name,
+    venue_address: event.venue_address,
+    starts_at: event.starts_at,
+    ends_at: event.ends_at,
+    status: event.status,
+    cover_image_url: event.cover_image_url,
+    organizer: { id: event.organizer_id, name: organizerName },
+  };
+}
+
+const EVENT_FOR_UPDATE = `SELECT e.id, e.title, e.description, e.venue_name, e.venue_address,
+         e.starts_at, e.ends_at, e.status, e.cover_image_url, e.organizer_id,
+         u.name AS organizer_name, e.starts_at <= now() AS start_time_passed
+    FROM events e
+    JOIN users u ON u.id = e.organizer_id
+   WHERE e.id = $1
+   FOR UPDATE OF e`;
+
+eventsRouter.post('/:id/publish', requireAuth, async (req, res, next) => {
+  try {
+    const idParsed = idParamSchema.safeParse(req.params);
+    if (!idParsed.success) {
+      throw AppError.badRequest('Event id must be a UUID');
+    }
+    const { id } = idParsed.data;
+
+    const event = await withTransaction(async (client) => {
+      const ownerResult = await client.query<EventMutationRow>(EVENT_FOR_UPDATE, [id]);
+      const owner = ownerResult.rows[0];
+      if (!owner) {
+        throw AppError.notFound(ErrorCode.EVENT_NOT_FOUND, 'Event not found');
+      }
+      if (owner.organizer_id !== req.user!.id) {
+        throw AppError.forbidden('You can only publish your own events');
+      }
+      if (owner.status === 'published') {
+        throw AppError.conflict(ErrorCode.CONFLICT, 'The event is already published');
+      }
+      if (owner.status === 'cancelled') {
+        throw AppError.conflict(ErrorCode.CONFLICT, 'A cancelled event cannot be published');
+      }
+
+      const ticketTypes = await client.query<{ has_ticket_types: boolean }>(
+        `SELECT EXISTS (SELECT 1 FROM ticket_types WHERE event_id = $1) AS has_ticket_types`,
+        [id],
+      );
+      if (!ticketTypes.rows[0]?.has_ticket_types) {
+        throw AppError.conflict(
+          ErrorCode.CONFLICT,
+          'Add at least one ticket type before publishing',
+        );
+      }
+      if (owner.start_time_passed) {
+        throw AppError.conflict(ErrorCode.CONFLICT, 'The event start time has already passed');
+      }
+
+      const updateResult = await client.query<EventDetailRow>(
+        `UPDATE events SET status = 'published'
+          WHERE id = $1
+          RETURNING id, title, description, venue_name, venue_address, starts_at, ends_at,
+                    status, cover_image_url, organizer_id`,
+        [id],
+      );
+      const updated = updateResult.rows[0];
+      if (!updated) {
+        throw new AppError(ErrorCode.INTERNAL_ERROR, 'Failed to publish event', 500);
+      }
+      await recordAudit(client, {
+        actorId: req.user!.id,
+        action: 'event.published',
+        entityType: 'event',
+        entityId: id,
+        eventId: id,
+        description: 'Published the event',
+      });
+      return { event: updated, organizerName: owner.organizer_name };
+    });
+
+    res.json({ event: toOwnedEvent(event.event, event.organizerName) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/events/:id/cancel  - organizer cancels their own event
+// ---------------------------------------------------------------------------
+
+eventsRouter.post('/:id/cancel', requireAuth, async (req, res, next) => {
+  try {
+    const idParsed = idParamSchema.safeParse(req.params);
+    if (!idParsed.success) {
+      throw AppError.badRequest('Event id must be a UUID');
+    }
+    const { id } = idParsed.data;
+
+    const event = await withTransaction(async (client) => {
+      const ownerResult = await client.query<EventMutationRow>(EVENT_FOR_UPDATE, [id]);
+      const owner = ownerResult.rows[0];
+      if (!owner) {
+        throw AppError.notFound(ErrorCode.EVENT_NOT_FOUND, 'Event not found');
+      }
+      if (owner.organizer_id !== req.user!.id) {
+        throw AppError.forbidden('You can only cancel your own events');
+      }
+      if (owner.status === 'cancelled') {
+        throw AppError.conflict(ErrorCode.CONFLICT, 'The event is already cancelled');
+      }
+
+      const updateResult = await client.query<EventDetailRow>(
+        `UPDATE events SET status = 'cancelled'
+          WHERE id = $1
+          RETURNING id, title, description, venue_name, venue_address, starts_at, ends_at,
+                    status, cover_image_url, organizer_id`,
+        [id],
+      );
+      const updated = updateResult.rows[0];
+      if (!updated) {
+        throw new AppError(ErrorCode.INTERNAL_ERROR, 'Failed to cancel event', 500);
+      }
+      const tickets = await client.query(
+        `UPDATE tickets SET status = 'cancelled'
+          WHERE event_id = $1 AND status = 'valid'`,
+        [id],
+      );
+      const orders = await client.query(
+        `UPDATE orders SET status = 'cancelled'
+          WHERE event_id = $1 AND status = 'pending'`,
+        [id],
+      );
+      const ticketCount = tickets.rowCount ?? 0;
+      const orderCount = orders.rowCount ?? 0;
+      await recordAudit(client, {
+        actorId: req.user!.id,
+        action: 'event.cancelled',
+        entityType: 'event',
+        entityId: id,
+        eventId: id,
+        description: `Cancelled the event: ${ticketCount} tickets and ${orderCount} pending orders cancelled`,
+      });
+      return { event: updated, organizerName: owner.organizer_name };
+    });
+
+    res.json({ event: toOwnedEvent(event.event, event.organizerName) });
   } catch (err) {
     next(err);
   }
