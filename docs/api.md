@@ -167,8 +167,8 @@ All four need a token, and all four work on the caller's own profile only.
 ## Events
 
 ```
-GET    /api/events                    public list (published only)
-GET    /api/events/:id                public detail
+GET    /api/events                    public list (published, not suspended)
+GET    /api/events/:id                public detail (404 once suspended)
 POST   /api/events                    organizer creates (role organizer: has a profile)
 PATCH  /api/events/:id                organizer edits
 POST   /api/events/:id/publish        draft -> published
@@ -260,6 +260,45 @@ DELETE /api/ticket-types/:id
 
 ---
 
+## Admin: suspending an event
+
+```
+POST /api/admin/events/:id/suspend      -> { event }
+POST /api/admin/events/:id/unsuspend    -> { event }
+```
+
+For `platform_admin` only (SRS 4.12). Everybody else logged in gets `403 FORBIDDEN`, and
+no token is `401`. Unknown events return `404 EVENT_NOT_FOUND`. Suspending an event that
+is already suspended, or lifting a suspension that is not there, is `409 CONFLICT`.
+
+A suspended event:
+
+- disappears from `GET /api/events`, and `GET /api/events/:id` answers `404 EVENT_NOT_FOUND`;
+- takes no new orders: `POST /api/orders` answers `409 CONFLICT`
+  ("This event is not accepting orders");
+- keeps everything that already exists. Orders and tickets are not cancelled, refunded or
+  hidden from their owners, and an order placed before the suspension can still be paid.
+
+Suspension sits on top of the organizer's `status` and never changes it, so lifting it
+puts the event back exactly as it was. Suspending and lifting each write an audit entry
+(`event.suspended`, `event.unsuspended`).
+
+```json
+"event": {
+  "id": "uuid",
+  "title": "Astana Tech Meetup",
+  "status": "published",
+  "suspended": true,
+  "suspended_at": "2026-10-25T12:00:00Z"
+}
+```
+
+`suspended_at` is `null` when `suspended` is `false`. This is only the admin's answer:
+the full event object does not carry the flag yet. Searching events, suspending users,
+reported events, platform settings and the admin pages are #63.
+
+---
+
 ## Orders (the important one)
 
 Two steps: create the order, then pay for it. Do not merge these.
@@ -346,7 +385,8 @@ All four need a token.
   `quantity`. Each name is trimmed and must be 1 to 100 characters. A missing list is
   allowed; a list of the wrong length is `400 VALIDATION_ERROR`.
 - The event must be published. A draft or a missing event is `404 EVENT_NOT_FOUND`,
-  the same as the public detail. A cancelled event is `409 CONFLICT`.
+  the same as the public detail. A cancelled event is `409 CONFLICT`, and so is an event
+  a platform admin has suspended (see "Admin: suspending an event").
 - Every ticket type must belong to that event and must not be hidden, otherwise
   `400 VALIDATION_ERROR`. A hidden type is orderable only with a promo code whose
   campaign lists that type explicitly in `ticket_type_ids` (see "Promo codes and
