@@ -3,7 +3,6 @@
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState, type FormEvent } from 'react';
 import {
-  ApiError,
   formatWhen,
   listDevOutbox,
   listMyEmails,
@@ -11,16 +10,14 @@ import {
   type InboxEmail,
   type User,
 } from '@/api';
+import { useI18n } from '@/i18n/client';
+import { errorText } from '@/i18n/errors';
 import { readToken, useSessionUser } from '@/session';
 
 const fieldClass =
   'mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-500';
 const buttonClass =
   'rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60';
-
-function errorMessage(err: unknown): string {
-  return err instanceof ApiError ? err.message : 'Something went wrong. Try again.';
-}
 
 function EmailBody({ body }: { body: string }) {
   return (
@@ -43,15 +40,16 @@ function EmailBody({ body }: { body: string }) {
 }
 
 function EmailList({ emails }: { emails: InboxEmail[] | null }) {
+  const { locale, t } = useI18n();
   if (emails === null) return null;
-  if (emails.length === 0) return <p className="mt-6 text-sm text-zinc-600">No emails yet.</p>;
+  if (emails.length === 0) return <p className="mt-6 text-sm text-zinc-600">{t.inbox.empty}</p>;
 
   return (
     <ul className="mt-6 space-y-4">
       {emails.map((email) => (
         <li key={email.id} className="rounded-lg border border-zinc-200 bg-white p-5">
           <h2 className="font-medium">{email.subject}</h2>
-          <p className="mt-1 text-xs text-zinc-500">{formatWhen(email.created_at)}</p>
+          <p className="mt-1 text-xs text-zinc-500">{formatWhen(email.created_at, locale)}</p>
           <EmailBody body={email.body} />
         </li>
       ))}
@@ -60,6 +58,7 @@ function EmailList({ emails }: { emails: InboxEmail[] | null }) {
 }
 
 function MyInbox({ user }: { user: User }) {
+  const { t } = useI18n();
   const [emails, setEmails] = useState<InboxEmail[] | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,13 +75,13 @@ function MyInbox({ user }: { user: User }) {
         setError(null);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(errorMessage(err));
+        if (!cancelled) setError(errorText(err, t));
       });
 
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [user, t]);
 
   async function resend() {
     const token = readToken();
@@ -94,7 +93,7 @@ function MyInbox({ user }: { user: User }) {
       await resendVerification(token);
       setEmails(await listMyEmails(token));
     } catch (err) {
-      setError(errorMessage(err));
+      setError(errorText(err, t));
     } finally {
       setPending(false);
     }
@@ -104,7 +103,7 @@ function MyInbox({ user }: { user: User }) {
     <div className="mt-6">
       {user.email_verified === false ? (
         <button type="button" disabled={pending} onClick={() => void resend()} className={buttonClass}>
-          {pending ? 'Sending…' : 'Send a new verification link'}
+          {pending ? t.inbox.sending : t.inbox.resend}
         </button>
       ) : null}
       {error ? (
@@ -113,7 +112,7 @@ function MyInbox({ user }: { user: User }) {
         </p>
       ) : null}
       {emails === null && error === null ? (
-        <p className="mt-6 text-sm text-zinc-600">Loading emails…</p>
+        <p className="mt-6 text-sm text-zinc-600">{t.inbox.loading}</p>
       ) : null}
       <EmailList emails={emails} />
     </div>
@@ -121,6 +120,7 @@ function MyInbox({ user }: { user: User }) {
 }
 
 function OutboxLookup({ initialEmail }: { initialEmail: string }) {
+  const { t } = useI18n();
   const [email, setEmail] = useState(initialEmail);
   const [emails, setEmails] = useState<InboxEmail[] | null>(null);
   const [pending, setPending] = useState(false);
@@ -135,7 +135,7 @@ function OutboxLookup({ initialEmail }: { initialEmail: string }) {
     try {
       setEmails(await listDevOutbox(email));
     } catch (err) {
-      setError(errorMessage(err));
+      setError(errorText(err, t));
     } finally {
       setPending(false);
     }
@@ -145,7 +145,7 @@ function OutboxLookup({ initialEmail }: { initialEmail: string }) {
     <div className="mt-6">
       <form onSubmit={onSubmit} className="max-w-sm">
         <label className="block text-sm font-medium">
-          Email
+          {t.common.email}
           <input
             type="email"
             required
@@ -156,7 +156,7 @@ function OutboxLookup({ initialEmail }: { initialEmail: string }) {
           />
         </label>
         <button type="submit" disabled={pending} className={`${buttonClass} mt-3`}>
-          {pending ? 'Loading…' : 'Show emails'}
+          {pending ? t.common.loading : t.inbox.show}
         </button>
       </form>
       {error ? (
@@ -181,13 +181,14 @@ function InboxContent() {
 }
 
 export default function InboxPage() {
+  const { t } = useI18n();
   return (
     <div className="mx-auto max-w-2xl">
-      <h1 className="text-2xl font-semibold">Inbox (simulated)</h1>
+      <h1 className="text-2xl font-semibold">{t.inbox.title}</h1>
       <p className="mt-2 text-sm text-zinc-600">
-        BiletFlow does not send real email in this demo. Every message it would send appears here.
+        {t.inbox.intro}
       </p>
-      <Suspense fallback={<p className="mt-6 text-sm text-zinc-600">Loading emails…</p>}>
+      <Suspense fallback={<p className="mt-6 text-sm text-zinc-600">{t.inbox.loading}</p>}>
         <InboxContent />
       </Suspense>
     </div>

@@ -6,6 +6,7 @@ import { Suspense, useCallback, useEffect, useState } from 'react';
 import {
   ApiError,
   createPromoCampaign,
+  formatMoney,
   formatPrice,
   formatWhen,
   listPromoCampaigns,
@@ -13,12 +14,8 @@ import {
   type PromoCampaign,
   type PromoCampaignInput,
 } from '@/api';
+import { useI18n } from '@/i18n/client';
 import { clearSession, readToken } from '@/session';
-
-// formatPrice says "Free" for 0, which reads wrong for revenue.
-function formatMoney(tiyn: number): string {
-  return tiyn === 0 ? '0 ₸' : formatPrice(tiyn);
-}
 
 const buttonClass =
   'rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60';
@@ -80,6 +77,7 @@ function CampaignQr({ campaignId, code }: { campaignId: string; code: string }) 
 function PromoCampaigns() {
   const { id: eventId } = useParams<{ id: string }>();
   const router = useRouter();
+  const { locale } = useI18n();
   const [campaigns, setCampaigns] = useState<PromoCampaign[] | null>(null);
   const [ticketTypes, setTicketTypes] = useState<
     { id: string; name: string; price: number; is_hidden: boolean }[]
@@ -239,7 +237,7 @@ function PromoCampaigns() {
   function discountText(campaign: PromoCampaign): string {
     return campaign.discount_type === 'percent'
       ? `${campaign.discount_value}%`
-      : formatPrice(campaign.discount_value);
+      : formatPrice(campaign.discount_value, locale);
   }
 
   return (
@@ -393,7 +391,7 @@ function PromoCampaigns() {
                           id={`type-${type.id}`}
                         />
                         <label htmlFor={`type-${type.id}`}>
-                          {type.name} ({formatPrice(type.price)})
+                          {type.name} ({formatPrice(type.price, locale)})
                           {type.is_hidden ? ' · hidden' : ''}
                         </label>
                       </li>
@@ -438,15 +436,15 @@ function PromoCampaigns() {
                     </p>
                     <p className="mt-1 text-sm text-zinc-600">
                       {campaign.orders} orders · {campaign.tickets_sold} tickets · gross{' '}
-                      {formatMoney(campaign.gross_revenue)} · discounts{' '}
-                      {formatMoney(campaign.discount_total)} · net{' '}
-                      {formatMoney(campaign.net_revenue)}
+                      {formatMoney(campaign.gross_revenue, locale)} · discounts{' '}
+                      {formatMoney(campaign.discount_total, locale)} · net{' '}
+                      {formatMoney(campaign.net_revenue, locale)}
                     </p>
                     {campaign.starts_at || campaign.ends_at ? (
                       <p className="mt-1 text-sm text-zinc-500">
-                        {campaign.starts_at ? `from ${formatWhen(campaign.starts_at)}` : ''}
+                        {campaign.starts_at ? `from ${formatWhen(campaign.starts_at, locale)}` : ''}
                         {campaign.starts_at && campaign.ends_at ? ' ' : ''}
-                        {campaign.ends_at ? `until ${formatWhen(campaign.ends_at)}` : ''}
+                        {campaign.ends_at ? `until ${formatWhen(campaign.ends_at, locale)}` : ''}
                       </p>
                     ) : null}
                   </div>

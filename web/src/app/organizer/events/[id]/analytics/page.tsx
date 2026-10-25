@@ -10,6 +10,7 @@ import {
   type AnalyticsFilters,
   type EventAnalytics,
 } from '@/api';
+import { useI18n } from '@/i18n/client';
 import { clearSession, readToken } from '@/session';
 
 const buttonClass =
@@ -24,6 +25,7 @@ const fieldClass =
 function EventAnalyticsPage() {
   const { id: eventId } = useParams<{ id: string }>();
   const router = useRouter();
+  const { locale } = useI18n();
   const [data, setData] = useState<EventAnalytics | null>(null);
   const [types, setTypes] = useState<EventAnalytics['by_ticket_type']>([]);
   const [pending, setPending] = useState(false);
@@ -256,21 +258,21 @@ function EventAnalyticsPage() {
             <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <div className="rounded-lg border border-zinc-200 bg-white p-4">
                 <dt className="text-sm text-zinc-600">Gross sales</dt>
-                <dd className="mt-1 text-xl font-semibold">{formatMoney(data.revenue.gross)}</dd>
+                <dd className="mt-1 text-xl font-semibold">{formatMoney(data.revenue.gross, locale)}</dd>
               </div>
               <div className="rounded-lg border border-zinc-200 bg-white p-4">
                 <dt className="text-sm text-zinc-600">Discounts</dt>
                 <dd className="mt-1 text-xl font-semibold">
-                  {formatMoney(data.revenue.discounts)}
+                  {formatMoney(data.revenue.discounts, locale)}
                 </dd>
               </div>
               <div className="rounded-lg border border-zinc-200 bg-white p-4">
                 <dt className="text-sm text-zinc-600">Refunds</dt>
-                <dd className="mt-1 text-xl font-semibold">{formatMoney(data.revenue.refunds)}</dd>
+                <dd className="mt-1 text-xl font-semibold">{formatMoney(data.revenue.refunds, locale)}</dd>
               </div>
               <div className="rounded-lg border border-zinc-200 bg-white p-4">
                 <dt className="text-sm text-zinc-600">Net revenue</dt>
-                <dd className="mt-1 text-xl font-semibold">{formatMoney(data.revenue.net)}</dd>
+                <dd className="mt-1 text-xl font-semibold">{formatMoney(data.revenue.net, locale)}</dd>
               </div>
             </dl>
             <p className="mt-2 text-sm text-zinc-600">
@@ -353,7 +355,7 @@ function EventAnalyticsPage() {
                       <td className="px-4 py-2">{type.capacity}</td>
                       <td className="px-4 py-2">{type.sold}</td>
                       <td className="px-4 py-2">{type.remaining}</td>
-                      <td className="px-4 py-2">{formatMoney(type.gross)}</td>
+                      <td className="px-4 py-2">{formatMoney(type.gross, locale)}</td>
                       <td className="px-4 py-2">{type.checked_in}</td>
                       <td className="px-4 py-2">{type.absent}</td>
                     </tr>
@@ -405,8 +407,8 @@ function EventAnalyticsPage() {
                       <td className="px-4 py-2">{day.date}</td>
                       <td className="px-4 py-2">{day.orders}</td>
                       <td className="px-4 py-2">{day.tickets}</td>
-                      <td className="px-4 py-2">{formatMoney(day.gross)}</td>
-                      <td className="px-4 py-2">{formatMoney(day.net)}</td>
+                      <td className="px-4 py-2">{formatMoney(day.gross, locale)}</td>
+                      <td className="px-4 py-2">{formatMoney(day.net, locale)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -448,9 +450,9 @@ function EventAnalyticsPage() {
                     <p className="mt-2 text-sm text-zinc-600">
                       {campaign.orders} {campaign.orders === 1 ? 'order' : 'orders'},{' '}
                       {campaign.tickets_sold} {campaign.tickets_sold === 1 ? 'ticket' : 'tickets'},
-                      gross {formatMoney(campaign.gross_revenue)}, discounts{' '}
-                      {formatMoney(campaign.discount_total)}, net{' '}
-                      {formatMoney(campaign.net_revenue)}
+                      gross {formatMoney(campaign.gross_revenue, locale)}, discounts{' '}
+                      {formatMoney(campaign.discount_total, locale)}, net{' '}
+                      {formatMoney(campaign.net_revenue, locale)}
                     </p>
                   </li>
                 ))}

@@ -12,6 +12,7 @@ import {
   refundOrder,
   type OrganizerOrder,
 } from '@/api';
+import { useI18n } from '@/i18n/client';
 import { clearSession, readToken } from '@/session';
 
 const buttonClass =
@@ -20,6 +21,7 @@ const buttonClass =
 function EventOrders() {
   const { id: eventId } = useParams<{ id: string }>();
   const router = useRouter();
+  const { locale } = useI18n();
   const [orders, setOrders] = useState<OrganizerOrder[] | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -149,19 +151,19 @@ function EventOrders() {
                     {order.ticket_count === 1 ? 'ticket' : 'tickets'}
                     {order.checked_in_count > 0 ? `, ${order.checked_in_count} checked in` : ''}
                     {' · '}
-                    {formatWhen(order.created_at)}
+                    {formatWhen(order.created_at, locale)}
                   </p>
                 </div>
                 <div className="text-right">
-                  <p className="text-sm font-medium text-zinc-900">{formatPrice(order.total)}</p>
+                  <p className="text-sm font-medium text-zinc-900">{formatPrice(order.total, locale)}</p>
                   <p className="text-sm text-zinc-600">{order.status}</p>
                 </div>
               </div>
 
               {order.status === 'refunded' && order.refund ? (
                 <p className="mt-2 text-sm text-zinc-600">
-                  Refunded {formatPrice(order.refund.amount)} (simulated) on{' '}
-                  {formatWhen(order.refund.refunded_at)}
+                  Refunded {formatPrice(order.refund.amount, locale)} (simulated) on{' '}
+                  {formatWhen(order.refund.refunded_at, locale)}
                 </p>
               ) : null}
 
@@ -174,7 +176,7 @@ function EventOrders() {
                       onClick={() =>
                         void perform(
                           `refund:${order.id}`,
-                          `Refund ${formatPrice(order.total)} for ${order.buyer.name}'s order (simulated, full refund)?`,
+                          `Refund ${formatPrice(order.total, locale)} for ${order.buyer.name}'s order (simulated, full refund)?`,
                           (token) => refundOrder(eventId, order.id, token),
                         )
                       }
