@@ -321,3 +321,55 @@ them.
 **Where.** `migrations/009_promo_codes.sql`, `src/routes/promo-campaigns.ts`,
 `src/routes/orders.ts`, the "Promo codes and campaign QR codes (organizer)" and
 "Orders" sections of `docs/api.md`.
+
+---
+
+## 12. Analytics are computed on read, and revenue means the money the organizer keeps
+
+**Decision.** The analytics endpoint computes every number from orders, order items,
+tickets, refunds, redemptions and check-ins on each request and stores none of them.
+Capacity is the sum of the ticket types' `quantity_total`, hidden types included.
+Sold counts the tickets of paid orders only, so a refund, a cancellation or an
+abandoned checkout takes its tickets back out; seats still held by pending orders are
+reported next to it and are not sales. Gross is the sum of the subtotals of every
+order that reached paid, refunded ones included, discounts are theirs, refunds are
+the discounted subtotal of the refunded ones, and net is gross minus discounts minus
+refunds. The 3% processing charge is never organizer revenue, so it sits outside all
+four figures, which also means a refund lowers net by less than the buyer is
+refunded. Attendance counts tickets in status `valid` or `checked_in`: absent is
+`valid`, and refunded and cancelled tickets are neither. Date filters and day buckets
+use Kazakhstan time (`Asia/Almaty`, UTC+5, no daylight saving). The campaign block
+repeats the campaign report numbers unchanged, so the date range does not narrow it.
+
+**SRS basis.**
+
+- 4.15: capacity, sold, remaining and percentage sold; gross sales, discounts,
+  refunds and net demonstration revenue in KZT; sales over time from order
+  timestamps; comparison by ticket type; campaign redemptions, attributed tickets and
+  revenue; checked-in attendees, absent holders and the check-in percentage; filters
+  by event, date range and ticket type; and all of it calculated from BiletFlow
+  records.
+- UC11: the organizer opens the dashboard, selects a date range or a ticket type, and
+  reviews sales, revenue, campaign performance and attendance.
+- Section 11, criterion 10: basic sales, capacity, campaign and attendance analytics
+  without adding fields to the attendee checkout.
+- 3.2 and 4.6: money is simulated, so this is demonstration revenue and is labelled
+  like every other simulated amount.
+- Decisions 5 and 11: the processing charge covers the platform's cost and is not
+  organizer revenue; the campaign report already leaves it out.
+
+**Rejected.** Stored counters or a nightly rollup: a counter drifts the first time a
+refund, a cancellation or an undone check-in arrives, and these volumes never need
+one. Leaving refunded orders out of gross instead of subtracting them: the organizer
+needs to see both what sold and what came back. Splitting an order's discount across
+its ticket types: the discount is recorded per order, and an invented split would
+produce per-type numbers nobody could reconcile with the order. Counting pending
+orders as sold: an unpaid checkout is not a sale. Filling days without sales with
+zeros: an empty day is visible by its missing date, and zeros would make a long quiet
+period look like activity. Using UTC for day buckets and plain date filters: the
+events and the team are in Kazakhstan, and a sale at 02:00 local would otherwise be
+counted on the previous day.
+
+**Where.** `src/routes/analytics.ts`, `src/lib/campaigns.ts`,
+`web/src/app/organizer/events/[id]/analytics/page.tsx`, the "Analytics (organizer)"
+section of `docs/api.md`.

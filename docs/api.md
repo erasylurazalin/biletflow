@@ -805,6 +805,128 @@ All validation is server-side. The phone decides nothing.
 
 ---
 
+## Analytics (organizer)
+
+The event dashboard (SRS 4.15, UC11, success criterion 10), read from orders, order
+items, tickets, refunds, redemptions and check-ins on every request. Nothing is
+stored: a stored counter would drift the first time a refund or an undone check-in
+happened.
+
+```
+GET /api/events/:id/analytics?from=&to=&ticket_type_id=
+    -> { event, filters, sales, revenue, by_ticket_type, check_in, over_time, campaigns }
+```
+
+Needs a token and is for the event's organizer only: anyone else gets `403 FORBIDDEN`,
+and a missing event is `404 EVENT_NOT_FOUND`. Draft, published and cancelled events
+all answer: an organizer looks at the numbers before the event and after calling it
+off. A filter narrows every block except `campaigns`, which is described below.
+
+Every query parameter is optional:
+
+- `from` and `to` are ISO 8601 date-times with an offset, or plain dates
+  (`2026-10-20`). They narrow on the order's `created_at`. `from` is inclusive and
+  `to` is exclusive, so a plain date covers that whole day in Kazakhstan time
+  (`Asia/Almaty`, UTC+5, no daylight saving), the same rule as the day buckets below.
+  `from` at or after `to` is `400 VALIDATION_ERROR`.
+- `ticket_type_id` narrows the numbers to one ticket type of this event. A type that
+  does not exist or belongs to another event is `400 VALIDATION_ERROR`, not `404`, so
+  the parameter cannot be used to probe other events.
+
+```json
+{
+  "event": { "id": "uuid", "title": "...", "status": "published", "starts_at": "..." },
+  "filters": { "from": "..." | null, "to": "..." | null, "ticket_type_id": "uuid" | null },
+  "sales": { "capacity": 200, "held": 4, "sold": 52, "remaining": 148, "percent_sold": 26.0 },
+  "revenue": {
+    "currency": "KZT",
+    "is_demonstration": true,
+    "gross": 26000000,
+    "discounts": 1300000,
+    "refunds": 2600000,
+    "net": 22100000
+  },
+  "by_ticket_type": [
+    {
+      "ticket_type_id": "uuid",
+      "name": "Early Bird",
+      "price": 500000,
+      "is_hidden": false,
+      "capacity": 100,
+      "sold": 30,
+      "remaining": 70,
+      "gross": 15000000,
+      "registered": 28,
+      "checked_in": 20,
+      "absent": 8
+    }
+  ],
+  "check_in": { "registered": 40, "checked_in": 31, "absent": 9, "percent": 77.5 },
+  "over_time": [
+    { "date": "2026-10-20", "orders": 3, "tickets": 7, "gross": 3500000,
+      "discounts": 350000, "net": 3150000 }
+  ],
+  "campaigns": [
+    { "id": "uuid", "name": "Spring deal", "code": "SPRING25", "is_active": true,
+      "redemptions": 12, "orders": 9, "tickets_sold": 18,
+      "gross_revenue": 9000000, "discount_total": 1800000, "net_revenue": 7200000 }
+  ]
+}
+```
+
+Every money figure is an integer in tiyn.
+
+**Sales.** `capacity` is the sum of the ticket types' `quantity_total`, hidden types
+included; with `ticket_type_id` it is that one type's. `sold` counts the tickets of
+paid orders, so a refund or a cancellation takes its tickets back out and a pending
+order is not a sale yet. `held` is the seats in pending orders that have not expired:
+the public detail's `quantity_available` is `capacity - sold - held`, while
+`remaining` here is `capacity - sold`. `percent_sold` is `sold / capacity` in percent,
+one decimal, and `0` when capacity is `0`. With a date range, `sold` counts the tickets
+paid for in that range and `remaining` is capacity minus that figure, so leave the
+range empty for the inventory picture.
+
+**Revenue.** `gross` is the sum of `subtotal` over every order that reached paid,
+refunded ones included; `discounts` is the sum of their `discount`; `refunds` is the
+sum of `subtotal - discount` over the refunded ones; and `net` is
+`gross - discounts - refunds`, the money the organizer keeps. These are order-level
+figures: with `ticket_type_id` they count the orders that include at least one ticket
+of that type, in full, because a discount belongs to the whole order. The figures are
+demonstration money like every payment (SRS 4.6), and clients label them so. The 3%
+processing fee is not organizer revenue (decision 5): it is not in `gross`, and a
+refund hands it back to the attendee without appearing here, so `refunds` is smaller
+than the `amount` the refunds endpoint records, by exactly that fee.
+
+**By ticket type.** One row per ticket type of the event, hidden ones included, in
+the public detail's order (price, then name); with `ticket_type_id`, that one row.
+`sold` and `gross` come from the order items of paid orders, where `gross` is the
+recorded `unit_price` times `quantity`, before discounts. A discount is recorded per
+order and not per item, so it is not split across types: `revenue.discounts` is the
+only discount figure.
+
+**Attendance.** `registered` counts tickets in status `valid` or `checked_in`,
+`checked_in` counts the scanned ones, `absent` the ones still waiting, and `percent`
+is `checked_in / registered` in percent, one decimal, `0` when nothing is registered.
+Refunded and cancelled tickets are in none of the three: their holders gave them up
+before the door. The same numbers read correctly before the event, when they simply
+say nobody has been scanned yet.
+
+**Sales over time.** One entry per day with orders, oldest first, bucketed by the
+local (`Asia/Almaty`) day of the order's `created_at`; days without orders are left
+out instead of being filled with zeros. `orders` and `tickets` count the orders
+created that day that reached paid, refunded included, and `net` is
+`gross - discounts`. Refunds are not bucketed by day: a refund happens on a different
+day than the sale, so it shows in `revenue` only.
+
+**Campaigns.** The same numbers `GET /api/events/:id/promo-campaigns` reports, newest
+first, computed by the same helper. They are campaign lifetime figures and are not
+narrowed by `from` or `to`; with `ticket_type_id` the list keeps the campaigns that
+cover that type, and a campaign with no `ticket_type_ids` covers every type. A
+campaign report counts paid orders that stand, so `gross_revenue` there and
+`revenue.gross` here can differ: one measures redemptions, the other money.
+
+---
+
 ## Audit log
 
 Not an endpoint yet. Every organizer, admin, payment and refund action writes one entry
@@ -854,7 +976,7 @@ Use these action names and no others. A new one goes into this table and into
 
 ## Not specified yet
 
-Seat maps, support chat, analytics. We add these when we
+Seat maps, support chat. We add these when we
 get to them. Don't design them now.
 
 ---
