@@ -30,6 +30,7 @@ export type EventListItem = {
 
 export type EventDetail = EventListItem & {
   paid_sales_active: boolean;
+  refund_policy: string | null;
   ticket_types: TicketType[];
 };
 
@@ -68,6 +69,13 @@ export type SimulatedPayment = {
   paid_at: string;
 };
 
+export type SimulatedRefund = {
+  amount: number;
+  currency: string;
+  is_demonstration: boolean;
+  refunded_at: string;
+};
+
 export type OrderItem = {
   ticket_type_id: string;
   name: string;
@@ -99,10 +107,26 @@ export type Order = {
   created_at: string;
   expires_at: string | null;
   payment: SimulatedPayment | null;
+  refund: SimulatedRefund | null;
   tickets: OrderTicket[];
 };
 
 export type OrderListItem = Omit<Order, 'tickets'>;
+
+// One order as the event's organizer sees it (docs/api.md "Refunds and cancellations").
+export type OrganizerOrder = {
+  id: string;
+  status: 'pending' | 'paid' | 'cancelled' | 'refunded';
+  buyer: { id: string; name: string; email: string };
+  subtotal: number;
+  discount: number;
+  processing_fee: number;
+  total: number;
+  ticket_count: number;
+  checked_in_count: number;
+  created_at: string;
+  refund: SimulatedRefund | null;
+};
 
 export type PaidSales = {
   event_id: string;
@@ -250,6 +274,38 @@ export async function payOrder(
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(simulateFailure ? { simulate_failure: true } : {}),
     },
+  );
+  return body.order;
+}
+
+export async function listEventOrders(eventId: string, token: string): Promise<OrganizerOrder[]> {
+  const body = await apiSend<{ orders: OrganizerOrder[] }>(
+    `/api/events/${encodeURIComponent(eventId)}/orders?limit=100`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  return body.orders;
+}
+
+export async function refundOrder(
+  eventId: string,
+  orderId: string,
+  token: string,
+): Promise<OrganizerOrder> {
+  const body = await apiSend<{ order: OrganizerOrder }>(
+    `/api/events/${encodeURIComponent(eventId)}/orders/${encodeURIComponent(orderId)}/refund`,
+    { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
+  );
+  return body.order;
+}
+
+export async function cancelRegistration(
+  eventId: string,
+  orderId: string,
+  token: string,
+): Promise<OrganizerOrder> {
+  const body = await apiSend<{ order: OrganizerOrder }>(
+    `/api/events/${encodeURIComponent(eventId)}/orders/${encodeURIComponent(orderId)}/cancel`,
+    { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
   );
   return body.order;
 }

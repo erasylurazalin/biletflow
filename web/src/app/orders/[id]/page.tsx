@@ -205,6 +205,12 @@ function Checkout() {
           <p className="text-zinc-700">
             This order was {order.status === 'cancelled' ? 'cancelled' : 'refunded'}.
           </p>
+          {order.status === 'refunded' && order.refund ? (
+            <p className="mt-2 text-sm text-zinc-600">
+              Refunded {formatPrice(order.refund.amount)} (simulated) on{' '}
+              {formatWhen(order.refund.refunded_at)}.
+            </p>
+          ) : null}
           <Link href={eventLink} className="mt-3 inline-block text-sm font-medium underline">
             Back to the event
           </Link>

@@ -53,6 +53,12 @@ export default async function EventPage({
         {formatWhen(event.starts_at)} — {formatWhen(event.ends_at)}
       </p>
       <p className="mt-4 max-w-2xl text-zinc-700">{event.description}</p>
+      {event.refund_policy ? (
+        <section className="mt-4 max-w-2xl">
+          <h2 className="text-sm font-medium text-zinc-800">Refund policy</h2>
+          <p className="mt-1 text-sm text-zinc-600">{event.refund_policy}</p>
+        </section>
+      ) : null}
       <p className="mt-2 text-sm text-zinc-500">Organizer: {event.organizer.name}</p>
 
       <h2 className="mt-8 mb-3 text-xl font-medium">Tickets</h2>

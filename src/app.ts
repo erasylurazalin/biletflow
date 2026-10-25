@@ -14,6 +14,7 @@ import { checkInRouter } from './routes/check-in';
 import { devRouter } from './routes/dev';
 import { eventsRouter } from './routes/events';
 import { meRouter } from './routes/me';
+import { organizerOrdersRouter } from './routes/organizer-orders';
 import { ordersRouter } from './routes/orders';
 import { paidSalesRouter } from './routes/paid-sales';
 import { staffRouter } from './routes/staff';
@@ -40,6 +41,7 @@ export function createApp() {
   app.use('/api', staffRouter);
   app.use('/api', checkInRouter);
   app.use('/api', paidSalesRouter);
+  app.use('/api', organizerOrdersRouter);
   app.use('/api', devRouter);
 
   app.use(notFoundHandler);

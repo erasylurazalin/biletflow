@@ -235,3 +235,41 @@ Figma file. The suggested technology stack is read as suggestions.
 **Rejected.** Drawing a Figma file after the fact.
 
 **Where.** `web/src/`.
+
+---
+
+## 10. Refunds are full, started by the organizer, and blocked once a ticket is used
+
+**Decision.** The organizer of the event can refund a paid order in full (simulated)
+or cancel a free registration. There are no partial refunds and no way for an
+attendee to start a refund. Only paid orders qualify. If any ticket of the order was
+already scanned at the door, the whole action is refused. A refunded or cancelled
+order releases its seats through the ordinary availability computation, and a refund
+records one row in a `refunds` table, an audit entry and a buyer email, all in the
+transaction that changes the order. The event may carry a free-text `refund_policy`
+of at most 2000 characters, shown to attendees; it is information only and nothing
+enforces it.
+
+**SRS basis.**
+
+- 4.9: the organizer can cancel a registration and process a refund; refunds update
+  the order, invalidate the tickets and return the seats to inventory.
+- UC5: the organizer selects the order and confirms the refund; the system updates
+  the order, invalidates the ticket and restores inventory.
+- 13.4: "advanced refund and dispute workflows" are listed as non-functional future
+  work and excluded from the MVP by 8. Full refunds only is our reading of that
+  exclusion: partial refunds, disputes and attendee-initiated refunds all belong to
+  the advanced workflows.
+- 3.2 and 4.6: money is simulated, so a refund is a demonstration refund and is
+  labelled like every other demonstration payment.
+
+**Rejected.** Attendee-initiated refunds with organizer approval: UC5 puts the action
+in the organizer's hands, and an approval queue is an advanced workflow. Partial
+refunds per ticket: 13.4 excludes them from the MVP. Blocking refunds on cancelled
+events: an organizer who calls off an event is exactly the person who must refund its
+paid orders afterwards. Enforcing the refund policy in code: the SRS says nothing
+about what a policy must contain, so it is left as free text.
+
+**Where.** `migrations/008_refunds.sql`, `src/routes/organizer-orders.ts`,
+`src/lib/refunds.ts`, the "Refunds and cancellations (organizer)" section of
+`docs/api.md`.

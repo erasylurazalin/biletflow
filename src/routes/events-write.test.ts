@@ -97,6 +97,8 @@ describe('POST /api/events', () => {
       new Date('2026-11-14T18:00:00Z'),
       new Date('2026-11-14T21:00:00Z'),
       null,
+      // refund_policy, not sent on create.
+      null,
       ownerId,
     ]);
   });
