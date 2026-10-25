@@ -306,6 +306,19 @@ describe('POST /api/orders', () => {
     expect(res.body.error.code).toBe('CONFLICT');
   });
 
+  it('returns 409 CONFLICT for a suspended event and creates no order', async () => {
+    answer([{ status: 'published', suspended: true, paid_sales_active: true }]);
+
+    const res = await request(app).post('/api/orders').set('Authorization', bearer()).send(body);
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('CONFLICT');
+    expect(res.body.error.message).toBe('This event is not accepting orders');
+    expect(query.mock.calls.some((call) => sqlOf(call).startsWith('INSERT INTO orders'))).toBe(
+      false,
+    );
+  });
+
   it.each([
     ['does not exist', []],
     ['belongs to another event', [{ ...lockedEarly, event_id: OTHER_EVENT_ID }]],

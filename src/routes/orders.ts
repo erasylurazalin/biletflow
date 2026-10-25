@@ -273,8 +273,13 @@ ordersRouter.post('/', requireAuth, async (req, res, next) => {
     const ticketTypeIds = items.map((item) => item.ticket_type_id);
 
     const orderId = await withTransaction(async (client) => {
-      const eventResult = await client.query<{ status: string; paid_sales_active: boolean }>(
+      const eventResult = await client.query<{
+        status: string;
+        suspended: boolean;
+        paid_sales_active: boolean;
+      }>(
         `SELECT e.status,
+                e.suspended_at IS NOT NULL AS suspended,
                 EXISTS (SELECT 1
                           FROM paid_sales_activations psa
                          WHERE psa.event_id = e.id
@@ -290,6 +295,11 @@ ordersRouter.post('/', requireAuth, async (req, res, next) => {
       }
       if (event.status === 'cancelled') {
         throw AppError.conflict(ErrorCode.CONFLICT, 'This event has been cancelled');
+      }
+      // A platform admin stopped the event (docs/api.md "Admin"). Orders already placed
+      // stay as they are, only new ones are refused.
+      if (event.suspended) {
+        throw AppError.conflict(ErrorCode.CONFLICT, 'This event is not accepting orders');
       }
 
       // The lock. Ordered by id, so two orders for the same pair of ticket types take

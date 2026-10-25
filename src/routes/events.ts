@@ -92,8 +92,10 @@ eventsRouter.get('/', async (req, res, next) => {
               u.name AS organizer_name
          FROM events e
          JOIN users u ON u.id = e.organizer_id
-        -- Public endpoint: drafts and cancelled events are nobody else's business.
+        -- Public endpoint: drafts and cancelled events are nobody else's business, and
+        -- neither are events a platform admin has suspended (migration 010).
         WHERE e.status = 'published'
+          AND e.suspended_at IS NULL
           -- $3 is NULL when no search was given, and then this condition is TRUE for
           -- every row. One query instead of two, without concatenating SQL.
           AND ($3::text IS NULL OR e.title ILIKE '%' || $3 || '%')
@@ -182,14 +184,15 @@ eventsRouter.get('/:id', async (req, res, next) => {
          FROM events e
          JOIN users u ON u.id = e.organizer_id
         WHERE e.id = $1
-          AND e.status = 'published'`,
+          AND e.status = 'published'
+          AND e.suspended_at IS NULL`,
       [id],
     );
 
     const event = eventResult.rows[0];
     if (!event) {
-      // Unpublished events answer 404 as well, on purpose: "this id exists but you may
-      // not see it" tells a stranger more than they need to know.
+      // Unpublished and suspended events answer 404 as well, on purpose: "this id exists
+      // but you may not see it" tells a stranger more than they need to know.
       throw AppError.notFound(ErrorCode.EVENT_NOT_FOUND, 'Event not found');
     }
 
