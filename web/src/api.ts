@@ -359,6 +359,26 @@ export async function listMyTickets(token: string): Promise<Ticket[]> {
   return body.tickets;
 }
 
+// The printable ticket (docs/api.md "Printable ticket (PDF)"). Same-origin path, so
+// next.config.ts rewrites it to the API and the browser never needs API_URL.
+export async function downloadTicketPdf(ticketId: string, token: string): Promise<Blob> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/tickets/${encodeURIComponent(ticketId)}/pdf`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    throw new ApiError(0, unreachableMessage());
+  }
+
+  if (!response.ok) {
+    const { message, code } = await messageFromResponse(response);
+    throw new ApiError(response.status, message, code);
+  }
+
+  return response.blob();
+}
+
 export async function listMyOrders(token: string): Promise<OrderListItem[]> {
   const body = await apiSend<{ orders: OrderListItem[] }>('/api/orders?limit=100', {
     headers: { Authorization: `Bearer ${token}` },

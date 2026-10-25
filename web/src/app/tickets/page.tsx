@@ -3,7 +3,13 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { ApiError, formatWhen, listMyTickets, type Ticket } from '@/api';
+import {
+  ApiError,
+  downloadTicketPdf,
+  formatWhen,
+  listMyTickets,
+  type Ticket,
+} from '@/api';
 import { clearSession, readToken } from '@/session';
 import { TicketQr } from '@/ticket-qr';
 
@@ -15,6 +21,8 @@ export default function TicketsPage() {
   const router = useRouter();
   const [tickets, setTickets] = useState<Ticket[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The ticket whose PDF is being fetched, so only its button says "Preparing…".
+  const [pending, setPending] = useState<string | null>(null);
 
   useEffect(() => {
     const token = readToken();
@@ -44,6 +52,37 @@ export default function TicketsPage() {
       cancelled = true;
     };
   }, [router]);
+
+  // Fetched with the token, then handed to the browser as a download: the PDF is a
+  // server-rendered document, never a link the browser opens on its own.
+  async function downloadPdf(ticket: Ticket): Promise<void> {
+    const token = readToken();
+    if (!token) {
+      router.replace('/login?next=/tickets');
+      return;
+    }
+
+    setPending(ticket.id);
+    setError(null);
+    try {
+      const blob = await downloadTicketPdf(ticket.id, token);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `biletflow-${ticket.code}.pdf`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (err: unknown) {
+      if (err instanceof ApiError && err.status === 401) {
+        clearSession();
+        router.replace('/login?next=/tickets');
+        return;
+      }
+      setError(err instanceof ApiError ? err.message : 'Could not prepare the PDF. Try again.');
+    } finally {
+      setPending(null);
+    }
+  }
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -89,11 +128,18 @@ export default function TicketsPage() {
                     <p className="mt-3 font-mono text-sm">{ticket.code}</p>
                     <p className="mt-2 text-sm text-zinc-600">Status: {statusLabel(ticket)}</p>
                   </div>
-                  {ticket.status === 'valid' ? (
-                    <div className="shrink-0 self-center sm:self-start">
-                      <TicketQr payload={ticket.qr_payload} />
-                    </div>
-                  ) : null}
+                  <div className="shrink-0 space-y-3 self-center sm:self-start">
+                    {ticket.status === 'valid' ? <TicketQr payload={ticket.qr_payload} /> : null}
+                    {/* Every status downloads: the PDF says the status itself. */}
+                    <button
+                      type="button"
+                      onClick={() => void downloadPdf(ticket)}
+                      disabled={pending === ticket.id}
+                      className="w-[240px] rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-medium hover:bg-zinc-50 disabled:opacity-60"
+                    >
+                      {pending === ticket.id ? 'Preparing…' : 'Download PDF'}
+                    </button>
+                  </div>
                 </div>
               </li>
             );
