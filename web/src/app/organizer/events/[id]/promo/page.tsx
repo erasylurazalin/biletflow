@@ -15,6 +15,8 @@ import {
   type PromoCampaignInput,
 } from '@/api';
 import { useI18n } from '@/i18n/client';
+import { errorText } from '@/i18n/errors';
+import { fill, plural } from '@/i18n/format';
 import { clearSession, readToken } from '@/session';
 
 const buttonClass =
@@ -24,6 +26,7 @@ const inputClass =
 
 // The campaign QR code, fetched with the Bearer token and shown from an object URL.
 function CampaignQr({ campaignId, code }: { campaignId: string; code: string }) {
+  const { t } = useI18n();
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -52,7 +55,7 @@ function CampaignQr({ campaignId, code }: { campaignId: string; code: string }) 
   }, [campaignId]);
 
   if (failed) {
-    return <p className="text-sm text-zinc-500">Could not load the QR code.</p>;
+    return <p className="text-sm text-zinc-500">{t.promo.qrFailed}</p>;
   }
   if (!url) {
     return <div className="h-32 w-32 rounded bg-zinc-200" />;
@@ -62,13 +65,13 @@ function CampaignQr({ campaignId, code }: { campaignId: string; code: string }) 
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={url}
-        alt={`Campaign QR code for ${code}`}
+        alt={fill(t.promo.qrAlt, { code })}
         width={128}
         height={128}
         className="rounded bg-white"
       />
       <a href={url} download={`promo-${code}.png`} className="text-sm font-medium underline">
-        Download
+        {t.promo.download}
       </a>
     </div>
   );
@@ -77,7 +80,7 @@ function CampaignQr({ campaignId, code }: { campaignId: string; code: string }) 
 function PromoCampaigns() {
   const { id: eventId } = useParams<{ id: string }>();
   const router = useRouter();
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const [campaigns, setCampaigns] = useState<PromoCampaign[] | null>(null);
   const [ticketTypes, setTicketTypes] = useState<
     { id: string; name: string; price: number; is_hidden: boolean }[]
@@ -108,12 +111,12 @@ function PromoCampaigns() {
         return;
       }
       if (err instanceof ApiError && err.status === 403) {
-        setError("Only the event's organizer can manage its campaigns");
+        setError(t.promo.ownerOnly);
         return;
       }
-      setError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.');
+      setError(errorText(err, t));
     },
-    [loginPath, router],
+    [loginPath, router, t],
   );
 
   const refresh = useCallback(async () => {
@@ -165,7 +168,7 @@ function PromoCampaigns() {
     }
     const parsedValue = Number(value);
     if (!name.trim() || !Number.isInteger(parsedValue) || parsedValue <= 0) {
-      setFormError('Give the campaign a name and a discount above 0.');
+      setFormError(t.promo.formError);
       return;
     }
     const input: PromoCampaignInput = {
@@ -198,7 +201,7 @@ function PromoCampaigns() {
         router.replace(loginPath);
         return;
       }
-      setFormError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.');
+      setFormError(errorText(err, t));
     } finally {
       setPending(null);
     }
@@ -243,12 +246,11 @@ function PromoCampaigns() {
   return (
     <div className="mx-auto max-w-2xl">
       <Link href={`/events/${eventId}`} className="text-sm text-zinc-500 hover:text-zinc-800">
-        ← Event
+        {t.organizer.back}
       </Link>
-      <h1 className="mt-4 text-2xl font-semibold">Promo campaigns</h1>
+      <h1 className="mt-4 text-2xl font-semibold">{t.promo.title}</h1>
       <p className="mt-2 text-sm text-zinc-600">
-        Each campaign gets a promo code and a campaign QR code: a picture of the event
-        link with a secret token, never a price.
+        {t.promo.intro}
       </p>
 
       {error ? (
@@ -257,12 +259,12 @@ function PromoCampaigns() {
         </p>
       ) : null}
 
-      {loading ? <p className="mt-6 text-sm text-zinc-600">Loading campaigns…</p> : null}
+      {loading ? <p className="mt-6 text-sm text-zinc-600">{t.promo.loading}</p> : null}
 
       {campaigns ? (
         <>
           <section className="mt-6 rounded-lg border border-zinc-200 bg-white p-5">
-            <h2 className="text-lg font-medium">New campaign</h2>
+            <h2 className="text-lg font-medium">{t.promo.newCampaign}</h2>
             <form
               className="mt-4 space-y-3"
               onSubmit={(event) => {
@@ -271,7 +273,7 @@ function PromoCampaigns() {
               }}
             >
               <label className="block text-sm">
-                <span className="mb-1 block font-medium">Name</span>
+                <span className="mb-1 block font-medium">{t.promo.name}</span>
                 <input
                   type="text"
                   maxLength={100}
@@ -282,7 +284,7 @@ function PromoCampaigns() {
               </label>
               <div className="flex gap-3">
                 <label className="block text-sm">
-                  <span className="mb-1 block font-medium">Discount</span>
+                  <span className="mb-1 block font-medium">{t.promo.discount}</span>
                   <select
                     value={discountType}
                     onChange={(event) =>
@@ -290,13 +292,13 @@ function PromoCampaigns() {
                     }
                     className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm"
                   >
-                    <option value="percent">Percent</option>
-                    <option value="fixed">Fixed (KZT)</option>
+                    <option value="percent">{t.promo.percent}</option>
+                    <option value="fixed">{t.promo.fixed}</option>
                   </select>
                 </label>
                 <label className="block flex-1 text-sm">
                   <span className="mb-1 block font-medium">
-                    {discountType === 'percent' ? 'Percent (1-100)' : 'Amount in KZT'}
+                    {discountType === 'percent' ? t.promo.percentValue : t.promo.amountValue}
                   </span>
                   <input
                     type="number"
@@ -310,18 +312,18 @@ function PromoCampaigns() {
               </div>
               <div className="flex gap-3">
                 <label className="block flex-1 text-sm">
-                  <span className="mb-1 block font-medium">Code (optional)</span>
+                  <span className="mb-1 block font-medium">{t.promo.code}</span>
                   <input
                     type="text"
                     maxLength={20}
-                    placeholder="Generated if empty"
+                    placeholder={t.promo.codePlaceholder}
                     value={code}
                     onChange={(event) => setCode(event.target.value.toUpperCase())}
                     className={inputClass}
                   />
                 </label>
                 <label className="block flex-1 text-sm">
-                  <span className="mb-1 block font-medium">Max uses (optional)</span>
+                  <span className="mb-1 block font-medium">{t.promo.maxUses}</span>
                   <input
                     type="number"
                     min={1}
@@ -334,7 +336,7 @@ function PromoCampaigns() {
               </div>
               <div className="flex gap-3">
                 <label className="block flex-1 text-sm">
-                  <span className="mb-1 block font-medium">Starts (optional)</span>
+                  <span className="mb-1 block font-medium">{t.promo.starts}</span>
                   <input
                     type="datetime-local"
                     value={startsAt}
@@ -343,7 +345,7 @@ function PromoCampaigns() {
                   />
                 </label>
                 <label className="block flex-1 text-sm">
-                  <span className="mb-1 block font-medium">Ends (optional)</span>
+                  <span className="mb-1 block font-medium">{t.promo.ends}</span>
                   <input
                     type="datetime-local"
                     value={endsAt}
@@ -353,7 +355,7 @@ function PromoCampaigns() {
                 </label>
               </div>
               <fieldset className="text-sm">
-                <legend className="mb-1 font-medium">Which ticket types</legend>
+                <legend className="mb-1 font-medium">{t.promo.scope}</legend>
                 <div className="flex gap-4">
                   <label className="flex items-center gap-1">
                     <input
@@ -362,7 +364,7 @@ function PromoCampaigns() {
                       checked={scope === 'all'}
                       onChange={() => setScope('all')}
                     />
-                    All
+                    {t.promo.all}
                   </label>
                   <label className="flex items-center gap-1">
                     <input
@@ -371,7 +373,7 @@ function PromoCampaigns() {
                       checked={scope === 'some'}
                       onChange={() => setScope('some')}
                     />
-                    Selected
+                    {t.promo.selected}
                   </label>
                 </div>
                 {scope === 'some' ? (
@@ -392,12 +394,12 @@ function PromoCampaigns() {
                         />
                         <label htmlFor={`type-${type.id}`}>
                           {type.name} ({formatPrice(type.price, locale)})
-                          {type.is_hidden ? ' · hidden' : ''}
+                          {type.is_hidden ? ` · ${t.organizer.hidden}` : ''}
                         </label>
                       </li>
                     ))}
                     {ticketTypes.length === 0 ? (
-                      <li className="text-zinc-500">This event has no ticket types yet.</li>
+                      <li className="text-zinc-500">{t.organizer.noTicketTypes}</li>
                     ) : null}
                   </ul>
                 ) : null}
@@ -412,14 +414,14 @@ function PromoCampaigns() {
                 disabled={pending !== null}
                 className={buttonClass}
               >
-                {pending === 'create' ? 'Creating…' : 'Create campaign'}
+                {pending === 'create' ? t.promo.creating : t.promo.create}
               </button>
             </form>
           </section>
 
           <ul className="mt-6 divide-y divide-zinc-200 rounded-lg border border-zinc-200 bg-white px-5">
             {campaigns.length === 0 ? (
-              <li className="py-4 text-sm text-zinc-600">No campaigns yet.</li>
+              <li className="py-4 text-sm text-zinc-600">{t.promo.empty}</li>
             ) : null}
             {campaigns.map((campaign) => (
               <li key={campaign.id} className="py-4">
@@ -429,28 +431,38 @@ function PromoCampaigns() {
                       {campaign.name} · <span className="font-mono">{campaign.code}</span>
                     </p>
                     <p className="mt-1 text-sm text-zinc-600">
-                      {discountText(campaign)} off
+                      {fill(t.promo.off, { discount: discountText(campaign) })} ·{' '}
                       {campaign.max_redemptions !== null
-                        ? ` · uses: ${campaign.redemptions} of ${campaign.max_redemptions}`
-                        : ` · uses: ${campaign.redemptions}`}
+                        ? fill(t.promo.usesOf, {
+                            used: campaign.redemptions,
+                            max: campaign.max_redemptions,
+                          })
+                        : fill(t.promo.uses, { used: campaign.redemptions })}
                     </p>
                     <p className="mt-1 text-sm text-zinc-600">
-                      {campaign.orders} orders · {campaign.tickets_sold} tickets · gross{' '}
-                      {formatMoney(campaign.gross_revenue, locale)} · discounts{' '}
-                      {formatMoney(campaign.discount_total, locale)} · net{' '}
-                      {formatMoney(campaign.net_revenue, locale)}
+                      {fill(t.promo.report, {
+                        orders: plural(locale, t.organizer.orderCount, campaign.orders),
+                        tickets: plural(locale, t.organizer.ticketCount, campaign.tickets_sold),
+                        gross: formatMoney(campaign.gross_revenue, locale),
+                        discounts: formatMoney(campaign.discount_total, locale),
+                        net: formatMoney(campaign.net_revenue, locale),
+                      })}
                     </p>
                     {campaign.starts_at || campaign.ends_at ? (
                       <p className="mt-1 text-sm text-zinc-500">
-                        {campaign.starts_at ? `from ${formatWhen(campaign.starts_at, locale)}` : ''}
+                        {campaign.starts_at
+                          ? fill(t.promo.from, { when: formatWhen(campaign.starts_at, locale) })
+                          : ''}
                         {campaign.starts_at && campaign.ends_at ? ' ' : ''}
-                        {campaign.ends_at ? `until ${formatWhen(campaign.ends_at, locale)}` : ''}
+                        {campaign.ends_at
+                          ? fill(t.promo.until, { when: formatWhen(campaign.ends_at, locale) })
+                          : ''}
                       </p>
                     ) : null}
                   </div>
                   <div className="text-right">
                     <p className="text-sm text-zinc-600">
-                      {campaign.is_active ? 'Active' : 'Disabled'}
+                      {campaign.is_active ? t.promo.active : t.promo.disabled}
                     </p>
                     <button
                       type="button"
@@ -461,10 +473,10 @@ function PromoCampaigns() {
                       className={`${buttonClass} mt-2`}
                     >
                       {pending === `toggle:${campaign.id}`
-                        ? 'Saving…'
+                        ? t.promo.saving
                         : campaign.is_active
-                          ? 'Disable'
-                          : 'Enable'}
+                          ? t.promo.disable
+                          : t.promo.enable}
                     </button>
                   </div>
                 </div>
@@ -478,7 +490,7 @@ function PromoCampaigns() {
                     onClick={() => copyLink(campaign)}
                     className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs font-medium text-zinc-600"
                   >
-                    {copied === campaign.id ? 'Copied' : 'Copy'}
+                    {copied === campaign.id ? t.promo.copied : t.promo.copy}
                   </button>
                 </div>
 
@@ -495,8 +507,9 @@ function PromoCampaigns() {
 }
 
 export default function EventPromoPage() {
+  const { t } = useI18n();
   return (
-    <Suspense fallback={<p className="text-sm text-zinc-600">Loading campaigns…</p>}>
+    <Suspense fallback={<p className="text-sm text-zinc-600">{t.promo.loading}</p>}>
       <PromoCampaigns />
     </Suspense>
   );
