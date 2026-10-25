@@ -2,7 +2,7 @@
 
 Next.js frontend. The home page and the event page read published events from the API (`GET /api/events` and `GET /api/events/:id`), including ticket types and prices on the detail page.
 
-Start the API first, from the repo root: `docker compose up -d`, `npm run migrate`, `npm run seed`, `npm run dev`.
+Start the API first, from the repo root: `docker compose up -d db`, `npm run migrate`, `npm run seed`, `npm run dev`.
 
 ```
 cd web

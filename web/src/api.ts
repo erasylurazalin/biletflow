@@ -279,7 +279,7 @@ function apiBase(): string {
 }
 
 function unreachableMessage(): string {
-  return `Could not reach the API at ${apiBase()}. From the repo root, run: docker compose up -d, npm run migrate, npm run seed, npm run dev.`;
+  return `Could not reach the API at ${apiBase()}. From the repo root, run: docker compose up -d db, npm run migrate, npm run seed, npm run dev.`;
 }
 
 async function messageFromResponse(

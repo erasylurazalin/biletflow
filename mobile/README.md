@@ -5,7 +5,7 @@ Mobile front-end built using React Native and Expo framework. Currently implemen
    * Event page: event details
    * Check-in page: post request to the api and works based on the response
 
-Requires starting the API from the root first: `docker compose up -d`, `npm run migrate`, `npm run seed`, `npm run dev`.
+Requires starting the API from the root first: `docker compose up -d db`, `npm run migrate`, `npm run seed`, `npm run dev`.
 
 To start the app:
 ```

@@ -11,14 +11,33 @@ The API contract is in [docs/api.md](docs/api.md). How we work (branches, pull
 requests, the lockfile, how an endpoint is laid out) is in
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Running it
+## Demo with Docker
+
+Needs only Docker (Docker Desktop on Windows and macOS).
+
+```
+docker compose up --build
+```
+
+That starts Postgres, the API on http://localhost:3000 and the web app on
+http://localhost:3001. The API migrates and seeds the database every time it starts,
+so the demo events are there on the first run. `docker compose down` stops it and keeps
+the data; `docker compose down -v` also deletes the database.
+
+Backups (Bash, so Git Bash on Windows):
+
+- `scripts/backup.sh` writes a dump of the compose database to `backups/`.
+- `scripts/restore.sh backups/<file>.sql` loads it back, into an empty database or over
+  the current one.
+
+## Running it for development
 
 Needs Node 24 (npm 11+) and Docker for the database.
 
 ```
 npm ci
 cp .env.example .env        # defaults match docker-compose.yml
-docker compose up -d        # Postgres 16 on 127.0.0.1:5432
+docker compose up -d db     # Postgres 16 on 127.0.0.1:5432, nothing else
 npm run migrate
 npm run seed                # two users, two events, three ticket types
 npm run dev                 # API on http://localhost:3000
