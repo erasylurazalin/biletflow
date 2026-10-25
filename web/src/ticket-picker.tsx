@@ -2,7 +2,14 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { ApiError, createOrder, formatPrice, formatWhen, type TicketType } from '@/api';
+import {
+  ApiError,
+  createOrder,
+  formatPrice,
+  formatWhen,
+  type PromoInfo,
+  type TicketType,
+} from '@/api';
 import { clearSession, readToken } from '@/session';
 
 function unavailableReason(ticket: TicketType, paidSalesActive: boolean): string | null {
@@ -23,22 +30,40 @@ export function TicketPicker({
   eventId,
   ticketTypes,
   paidSalesActive,
+  promo,
 }: {
   eventId: string;
   ticketTypes: TicketType[];
   paidSalesActive: boolean;
+  promo?: PromoInfo | null;
 }) {
   const router = useRouter();
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [attendeeNames, setAttendeeNames] = useState<Record<string, string[]>>({});
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [promoCode, setPromoCode] = useState(promo?.code ?? '');
+  const [promoError, setPromoError] = useState<string | null>(null);
 
-  const selectedCount = ticketTypes.reduce(
-    (sum, ticket) => sum + (quantities[ticket.id] ?? 0),
-    0,
-  );
-  const total = ticketTypes.reduce(
+  // The hidden types the code covers become orderable here: the public event detail
+  // leaves them out, so the promo response is where they come from.
+  const hiddenCovered: TicketType[] = (promo?.ticket_types ?? [])
+    .filter((type) => !ticketTypes.some((visible) => visible.id === type.id))
+    .map((type) => ({
+      id: type.id,
+      name: type.name,
+      price: type.price,
+      currency: 'KZT',
+      quantity_total: type.quantity_available,
+      quantity_available: type.quantity_available,
+      sales_start_at: null,
+      sales_end_at: null,
+      is_hidden: true,
+    }));
+  const orderable = [...ticketTypes, ...hiddenCovered];
+
+  const selectedCount = orderable.reduce((sum, ticket) => sum + (quantities[ticket.id] ?? 0), 0);
+  const total = orderable.reduce(
     (sum, ticket) => sum + ticket.price * (quantities[ticket.id] ?? 0),
     0,
   );
@@ -53,7 +78,7 @@ export function TicketPicker({
       return;
     }
 
-    const items = ticketTypes.flatMap((ticket) => {
+    const items = orderable.flatMap((ticket) => {
       const quantity = quantities[ticket.id] ?? 0;
       const savedNames = attendeeNames[ticket.id] ?? [];
       const names = Array.from(
@@ -71,16 +96,22 @@ export function TicketPicker({
           ]
         : [];
     });
+    const code = promoCode.trim();
 
     setError(null);
+    setPromoError(null);
     setPending(true);
     try {
-      const order = await createOrder(token, eventId, items);
+      const order = await createOrder(token, eventId, items, code || undefined);
       router.push(`/orders/${order.id}`);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         clearSession();
         router.replace(loginPath);
+        return;
+      }
+      if (err instanceof ApiError && err.code === 'PROMO_CODE_INVALID') {
+        setPromoError(err.message);
         return;
       }
       setError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.');
@@ -92,7 +123,7 @@ export function TicketPicker({
   return (
     <div>
       <ul className="space-y-3">
-        {ticketTypes.map((ticket) => {
+        {orderable.map((ticket) => {
           const reason = unavailableReason(ticket, paidSalesActive);
           const maximum = Math.min(10, ticket.quantity_available);
           return (
@@ -132,7 +163,7 @@ export function TicketPicker({
       </ul>
       {selectedCount >= 1 && selectedCount <= 10 ? (
         <div className="mt-5 space-y-3">
-          {ticketTypes.flatMap((ticket) =>
+          {orderable.flatMap((ticket) =>
             Array.from({ length: quantities[ticket.id] ?? 0 }, (_, index) => (
               <label key={`${ticket.id}-${index}`} className="block text-sm">
                 <span className="mb-1 block font-medium">
@@ -157,6 +188,40 @@ export function TicketPicker({
           )}
         </div>
       ) : null}
+      <div className="mt-5 max-w-sm">
+        <label htmlFor="promo-code" className="mb-1 block text-sm font-medium">
+          Promo code
+        </label>
+        <input
+          id="promo-code"
+          type="text"
+          maxLength={30}
+          placeholder="Enter a promo code"
+          value={promoCode}
+          onChange={(event) => {
+            setPromoCode(event.target.value);
+            setPromoError(null);
+          }}
+          className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm uppercase"
+        />
+        {promo ? (
+          <p className="mt-1 text-sm text-zinc-600">
+            Code {promo.code} applied:{' '}
+            {promo.discount_type === 'percent'
+              ? `${promo.discount_value}%`
+              : formatPrice(promo.discount_value)}{' '}
+            off{' '}
+            {promo.ticket_type_ids === null
+              ? 'all tickets'
+              : promo.ticket_types.map((type) => type.name).join(', ')}
+          </p>
+        ) : null}
+        {promoError ? (
+          <p role="alert" className="mt-1 text-sm text-red-700">
+            {promoError}
+          </p>
+        ) : null}
+      </div>
       <div className="mt-5 flex flex-wrap items-center gap-4">
         <p className="font-medium">Total: {formatPrice(total)}</p>
         <button

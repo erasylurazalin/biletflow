@@ -23,6 +23,10 @@
  *
  * Orders belong to the buyer. Somebody else's order is 404, never 403, so order ids
  * cannot be probed.
+ *
+ * An optional promo code is validated and applied inside the same transaction, under a
+ * lock on the campaign row (routes/promo-campaigns.ts), so its redemption limit holds
+ * exactly the way the seat counts do.
  */
 import { randomBytes } from 'node:crypto';
 import { Router } from 'express';
@@ -70,10 +74,13 @@ const ORDER_SELECT = `SELECT o.id,
          o.total,
          o.created_at,
          o.expires_at,
+         pcamp.code AS promo_code,
+         pcamp.name AS promo_campaign_name,
          ${PAYMENT_COLUMNS},
          ${REFUND_COLUMNS}
     FROM orders o
     JOIN events e ON e.id = o.event_id
+    LEFT JOIN promo_campaigns pcamp ON pcamp.id = o.promo_campaign_id
     LEFT JOIN payments pay ON pay.order_id = o.id
     LEFT JOIN refunds rf ON rf.order_id = o.id`;
 
@@ -88,6 +95,8 @@ interface OrderRow extends PaymentColumns, RefundColumns {
   total: number;
   created_at: Date;
   expires_at: Date | null;
+  promo_code: string | null;
+  promo_campaign_name: string | null;
 }
 
 interface OrderItemRow {
@@ -116,6 +125,10 @@ function toOrder(row: OrderRow, items: OrderItemRow[], tickets?: TicketRow[]) {
     discount: row.discount,
     processing_fee: row.processing_fee,
     total: row.total,
+    // The campaign a promo code redeemed, when the order has one (docs/api.md).
+    promo: row.promo_code
+      ? { code: row.promo_code, campaign_name: row.promo_campaign_name ?? '' }
+      : null,
     created_at: row.created_at,
     expires_at: row.expires_at,
     payment: toPayment(row),
@@ -204,6 +217,8 @@ function ticketCode(): string {
 const createSchema = z
   .object({
     event_id: z.uuid(),
+    // An optional promo code. Case-insensitive: it is upper-cased before the lookup.
+    promo_code: z.string().trim().min(1).max(100).optional(),
     items: z
       .array(
         z
@@ -237,6 +252,16 @@ interface LockedTicketTypeRow {
   on_sale: boolean;
 }
 
+// The campaign a given promo code belongs to, as the create flow needs it. Fields the
+// refusals read (event, is_active, the window) are checked before this row is kept.
+interface LockedCampaignRow {
+  id: string;
+  discount_type: 'percent' | 'fixed';
+  discount_value: number;
+  max_redemptions: number | null;
+  ticket_type_ids: string[] | null;
+}
+
 ordersRouter.post('/', requireAuth, async (req, res, next) => {
   try {
     const parsed = createSchema.safeParse(req.body);
@@ -244,6 +269,7 @@ ordersRouter.post('/', requireAuth, async (req, res, next) => {
       throw badRequestFrom(parsed.error, 'field');
     }
     const { event_id: eventId, items } = parsed.data;
+    const promoCode = parsed.data.promo_code?.toUpperCase();
     const ticketTypeIds = items.map((item) => item.ticket_type_id);
 
     const orderId = await withTransaction(async (client) => {
@@ -291,14 +317,107 @@ ordersRouter.post('/', requireAuth, async (req, res, next) => {
 
       for (const item of items) {
         const type = types.get(item.ticket_type_id);
-        // Hidden types are for promo codes, which do not exist yet. Saying "hidden"
-        // would reveal that the type exists, so all three cases read the same.
-        if (!type || type.event_id !== eventId || type.is_hidden) {
+        if (!type || type.event_id !== eventId) {
           throw AppError.badRequest(
             `Ticket type ${item.ticket_type_id} is not on sale for this event`,
           );
         }
       }
+
+      // The promo step (docs/api.md "Promo codes and campaign QR codes"). The campaign
+      // row is locked FOR UPDATE like the ticket types above, so ten buyers checking
+      // out with the same code at the same moment take turns here, and the redemption
+      // limit below counts what everyone before us has committed.
+      let campaign: LockedCampaignRow | null = null;
+      if (promoCode) {
+        const campaignResult = await client.query<
+          LockedCampaignRow & {
+            event_id: string;
+            is_active: boolean;
+            not_started: boolean;
+            expired: boolean;
+          }
+        >(
+          `SELECT pc.id,
+                  pc.event_id,
+                  pc.discount_type,
+                  pc.discount_value,
+                  pc.max_redemptions,
+                  pc.ticket_type_ids,
+                  pc.is_active,
+                  (pc.starts_at IS NOT NULL AND now() < pc.starts_at) AS not_started,
+                  (pc.ends_at IS NOT NULL AND pc.ends_at <= now()) AS expired
+             FROM promo_campaigns pc
+            WHERE pc.code = $1
+            FOR UPDATE OF pc`,
+          [promoCode],
+        );
+        const found = campaignResult.rows[0];
+        // An unknown code and a code of another event read the same (docs/api.md).
+        if (!found || found.event_id !== eventId) {
+          throw AppError.conflict(ErrorCode.PROMO_CODE_INVALID, 'This promo code is not valid');
+        }
+        if (!found.is_active) {
+          throw AppError.conflict(
+            ErrorCode.PROMO_CODE_INVALID,
+            'This promo code is no longer active',
+          );
+        }
+        if (found.not_started) {
+          throw AppError.conflict(
+            ErrorCode.PROMO_CODE_INVALID,
+            'This promo code is not active yet',
+          );
+        }
+        if (found.expired) {
+          throw AppError.conflict(ErrorCode.PROMO_CODE_INVALID, 'This promo code has expired');
+        }
+        campaign = found;
+      }
+
+      // Rule 8: a hidden type is orderable only through a code whose campaign lists
+      // that type explicitly. Without a code, or with one that does not list it, keep
+      // today's 400: saying "hidden" would reveal that the type exists.
+      for (const item of items) {
+        const type = types.get(item.ticket_type_id)!;
+        if (type.is_hidden && !campaign?.ticket_type_ids?.includes(item.ticket_type_id)) {
+          throw AppError.badRequest(
+            `Ticket type ${item.ticket_type_id} is not on sale for this event`,
+          );
+        }
+      }
+
+      if (campaign) {
+        const covers = (ticketTypeId: string) =>
+          campaign!.ticket_type_ids === null || campaign!.ticket_type_ids.includes(ticketTypeId);
+        if (!items.some((item) => covers(item.ticket_type_id))) {
+          throw AppError.conflict(
+            ErrorCode.PROMO_CODE_INVALID,
+            'This promo code does not apply to the selected tickets',
+          );
+        }
+        if (campaign.max_redemptions !== null) {
+          // Counted in its own statement, after the lock is granted, for the same
+          // reason as the seat count below. The live rule is the same one HELD_SQL
+          // applies to seats: paid orders, and pending orders that have not expired.
+          const liveResult = await client.query<{ live: number }>(
+            `SELECT count(*)::int AS live
+               FROM promo_redemptions r
+               JOIN orders o ON o.id = r.order_id
+              WHERE r.campaign_id = $1
+                AND (o.status = 'paid'
+                     OR (o.status = 'pending' AND (o.expires_at IS NULL OR o.expires_at > now())))`,
+            [campaign.id],
+          );
+          if (liveResult.rows[0]!.live >= campaign.max_redemptions) {
+            throw AppError.conflict(
+              ErrorCode.PROMO_CODE_INVALID,
+              'This promo code has been fully used',
+            );
+          }
+        }
+      }
+
       // SRS 4.5: paid tickets cannot be bought before activation. Free types on the same
       // event can, so the check is per ticket type, not per event.
       for (const item of items) {
@@ -345,12 +464,31 @@ ordersRouter.post('/', requireAuth, async (req, res, next) => {
       }
 
       // name and unit_price are copied, so a later price change does not touch this
-      // order. discount stays 0 until promo codes exist.
+      // order. A promo discount covers only the items whose ticket type the campaign
+      // covers ("applicable subtotal"), percent is rounded to the tiyn and fixed is
+      // capped at the applicable amount, once per order (docs/decisions.md, decision
+      // 11). The processing charge is 3% of what is left after the discount and is
+      // never discounted itself.
+      const covered = (ticketTypeId: string) =>
+        campaign === null ||
+        campaign.ticket_type_ids === null ||
+        campaign.ticket_type_ids.includes(ticketTypeId);
       const subtotal = items.reduce(
         (sum, item) => sum + item.quantity * types.get(item.ticket_type_id)!.price,
         0,
       );
-      const discount = 0;
+      const applicable = items.reduce(
+        (sum, item) =>
+          covered(item.ticket_type_id)
+            ? sum + item.quantity * types.get(item.ticket_type_id)!.price
+            : sum,
+        0,
+      );
+      const discount = campaign
+        ? campaign.discount_type === 'percent'
+          ? Math.round((applicable * campaign.discount_value) / 100)
+          : Math.min(campaign.discount_value, applicable)
+        : 0;
       const processingFee = Math.round(((subtotal - discount) * PROCESSING_FEE_PERCENT) / 100);
       const total = subtotal - discount + processingFee;
 
@@ -359,10 +497,12 @@ ordersRouter.post('/', requireAuth, async (req, res, next) => {
         // requireAuth guarantees req.user.
         orderResult = await client.query<{ id: string }>(
           `INSERT INTO orders
-             (user_id, event_id, status, subtotal, discount, processing_fee, total, expires_at)
-           VALUES ($1, $2, 'pending', $3, $4, $5, $6, now() + interval '${HOLD_MINUTES} minutes')
+             (user_id, event_id, status, subtotal, discount, processing_fee, total,
+              promo_campaign_id, expires_at)
+           VALUES ($1, $2, 'pending', $3, $4, $5, $6, $7,
+                   now() + interval '${HOLD_MINUTES} minutes')
            RETURNING id`,
-          [req.user!.id, eventId, subtotal, discount, processingFee, total],
+          [req.user!.id, eventId, subtotal, discount, processingFee, total, campaign?.id ?? null],
         );
       } catch (err) {
         if ((err as { code?: string }).code === PG_FOREIGN_KEY_VIOLATION) {
@@ -391,6 +531,17 @@ ordersRouter.post('/', requireAuth, async (req, res, next) => {
           items.map((item) => JSON.stringify(item.attendee_names ?? null)),
         ],
       );
+
+      // The redemption is one row per order and stays forever: refunded and expired
+      // orders free their redemption by not counting any more, the same way they free
+      // their seats (docs/decisions.md, decision 11).
+      if (campaign) {
+        await client.query(
+          `INSERT INTO promo_redemptions (campaign_id, order_id, discount_amount)
+           VALUES ($1, $2, $3)`,
+          [campaign.id, newOrderId, discount],
+        );
+      }
 
       return newOrderId;
     });

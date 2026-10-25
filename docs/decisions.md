@@ -273,3 +273,51 @@ about what a policy must contain, so it is left as free text.
 **Where.** `migrations/008_refunds.sql`, `src/routes/organizer-orders.ts`,
 `src/lib/refunds.ts`, the "Refunds and cancellations (organizer)" section of
 `docs/api.md`.
+
+---
+
+## 11. Promo codes: one per order, the limit counted like seats, and fees not discounted
+
+**Decision.** A promotional campaign belongs to one event and carries a percent or
+fixed-KZT discount, an optional validity window, an optional redemption limit and an
+optional list of covered ticket types. Each campaign has a promo code, typed by the
+buyer, and a campaign link with an opaque token, whose QR code is generated on the
+server and opens no door: check-in refuses anything that is not a signed ticket
+payload.
+
+An order carries at most one promo code. A redemption counts while its order is
+`paid`, or `pending` and not expired: the same rule as held seats. An abandoned
+checkout therefore frees its redemption by itself, and a refund or cancellation frees
+it too, without anyone sweeping rows. The limit is enforced under a lock on the
+campaign row inside the order transaction, so it holds when many people check out at
+once.
+
+The discount covers only the items whose ticket type the campaign covers. A percent
+discount is rounded to the tiyn; a fixed discount is capped at the covered subtotal
+and applies once per order. The 3% processing charge is computed from the price after
+the discount and is never discounted itself. In the campaign report, `orders`,
+`tickets sold` and revenue count paid orders only; processing fees are not revenue
+for the organizer and are left out.
+
+**SRS basis.**
+
+- 4.14: promotional campaigns with percentage or fixed-KZT discounts, validity dates,
+  maximum redemptions and applicable ticket types, plus campaign QR codes that are
+  not admission tickets.
+- UC10: the buyer enters a promo code at checkout; the system validates it and applies
+  the discount.
+- 11, success criteria 7 and 8: a campaign link shows the discount applied, and the
+  scanner can tell a campaign QR code from an admission ticket.
+- 4.6: the system calculates totals and processing charges.
+
+**Rejected.** Stacking several codes on one order: the SRS speaks of "a promo code",
+and one-per-order keeps the discount explainable at checkout. Counting abandoned
+orders against the limit: a checkout that was never paid is not a redemption, and
+seats it held are released too. Discounting the processing charge: the charge exists
+to cover the platform's cost (decision 5), so it is taken on the discounted price,
+which is also what keeps a 100% campaign free instead of paying the buyer's fee for
+them.
+
+**Where.** `migrations/009_promo_codes.sql`, `src/routes/promo-campaigns.ts`,
+`src/routes/orders.ts`, the "Promo codes and campaign QR codes (organizer)" and
+"Orders" sections of `docs/api.md`.

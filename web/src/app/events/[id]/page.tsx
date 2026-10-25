@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ApiError, formatWhen, getEvent } from '@/api';
+import { ApiError, formatWhen, getEvent, getPromoByToken, type PromoInfo } from '@/api';
 import { ApiUnavailable } from '@/api-unavailable';
 import { TicketPicker } from '@/ticket-picker';
 
@@ -8,10 +8,27 @@ export const dynamic = 'force-dynamic';
 
 export default async function EventPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ promo?: string }>;
 }) {
   const { id } = await params;
+  const { promo: promoToken } = await searchParams;
+
+  // A campaign link (?promo=<token>) fills the promo field. A dead or foreign link is
+  // just ignored: the page still shows the event without a code.
+  let promo: PromoInfo | null = null;
+  if (promoToken) {
+    try {
+      const fetched = await getPromoByToken(promoToken);
+      if (fetched.event_id === id) {
+        promo = fetched;
+      }
+    } catch {
+      promo = null;
+    }
+  }
 
   let event;
   try {
@@ -62,13 +79,14 @@ export default async function EventPage({
       <p className="mt-2 text-sm text-zinc-500">Organizer: {event.organizer.name}</p>
 
       <h2 className="mt-8 mb-3 text-xl font-medium">Tickets</h2>
-      {event.ticket_types.length === 0 ? (
+      {event.ticket_types.length === 0 && !promo ? (
         <p className="text-zinc-600">No tickets on sale.</p>
       ) : (
         <TicketPicker
           eventId={event.id}
           ticketTypes={event.ticket_types}
           paidSalesActive={event.paid_sales_active}
+          promo={promo}
         />
       )}
     </div>
