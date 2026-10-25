@@ -28,8 +28,9 @@ const ticketRow = {
   ticket_type_name: 'Early Bird',
   event_id: EVENT_ID,
   event_title: 'Astana Tech Meetup',
-  event_starts_at: '2026-11-14T18:00:00.000Z',
+  event_starts_at: new Date('2026-11-14T18:00:00.000Z'),
   event_venue_name: 'Nazarbayev University',
+  event_venue_address: 'Kabanbay Batyr 53, Astana',
 };
 
 function rows(value: unknown[]) {
@@ -107,5 +108,53 @@ describe('GET /api/tickets/:id', () => {
 
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe('TICKET_NOT_FOUND');
+  });
+});
+
+describe('GET /api/tickets/:id/pdf', () => {
+  it('returns 401 without a token', async () => {
+    const res = await request(app).get(`/api/tickets/${TICKET_ID}/pdf`);
+
+    expect(res.status).toBe(401);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 VALIDATION_ERROR for an id that is not a UUID', async () => {
+    const res = await request(app)
+      .get('/api/tickets/not-a-uuid/pdf')
+      .set('Authorization', bearer());
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 TICKET_NOT_FOUND for a ticket that is not mine', async () => {
+    query.mockResolvedValueOnce(rows([]));
+
+    const res = await request(app)
+      .get(`/api/tickets/${TICKET_ID}/pdf`)
+      .set('Authorization', bearer(STRANGER_ID));
+
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('TICKET_NOT_FOUND');
+    expect(query.mock.calls[0]?.[1]).toEqual([TICKET_ID, STRANGER_ID]);
+  });
+
+  it('returns the ticket as an A4 PDF attachment', async () => {
+    query.mockResolvedValueOnce(rows([ticketRow]));
+
+    const res = await request(app)
+      .get(`/api/tickets/${TICKET_ID}/pdf`)
+      .set('Authorization', bearer());
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('application/pdf');
+    expect(res.headers['content-disposition']).toBe(
+      'attachment; filename="biletflow-BF-7K2M-9XQP.pdf"',
+    );
+    // supertest hands a body of a non-textual type back as a Buffer.
+    expect((res.body as Buffer).subarray(0, 5).toString('latin1')).toBe('%PDF-');
+    expect(query.mock.calls[0]?.[1]).toEqual([TICKET_ID, BUYER_ID]);
   });
 });

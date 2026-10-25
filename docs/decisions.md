@@ -373,3 +373,38 @@ counted on the previous day.
 **Where.** `src/routes/analytics.ts`, `src/lib/campaigns.ts`,
 `web/src/app/organizer/events/[id]/analytics/page.tsx`, the "Analytics (organizer)"
 section of `docs/api.md`.
+
+---
+
+## 13. The printable ticket is a PDF rendered from the ticket record, never a stored file
+
+**Decision.** `GET /api/tickets/:id/pdf` renders a one-page A4 PDF from the canonical
+ticket record on every request and stores no file: the event title, date and time in
+Kazakhstan time, venue name and address, ticket type, attendee name, ticket code, the
+ticket's status, and the QR code of its `qr_payload`. Every status prints. The payload
+is the same one the app shows, so a printed copy is the same admission and the scanner,
+not the paper, decides validity. The page carries no price, no payment data, no email
+and no seat, because BiletFlow assigns no seats. The QR is black on white, at least
+60 mm square, with a quiet zone and error correction level Q, so a grayscale print on
+A4 decodes. The code sits a fixed distance above the footer with the text filling the
+space above it, so text that cannot fit is shortened with a trailing ellipsis, while the
+ticket code, the status and the QR code are never shortened. Text uses an embedded
+DejaVu Sans, because standard PDF fonts cannot encode Kazakh and Russian names.
+
+**SRS basis.** 4.11 and UC7 (the contents list, no payment-card details, one identifier
+for digital and printed copies); section 8 (legible text and scannable QR on A4, in
+colour or grayscale, and the server-generated PDF from the canonical record); section
+11, criterion 4.
+
+**Rejected.** Storing or caching generated files: the record is canonical and a stale
+file would print a status that is no longer true. Printing only valid tickets: an
+attendee who prints before a refund keeps paper that looks usable, and a status on the
+page is more honest than a missing document. Dropping the QR from cancelled and
+refunded tickets: the scanner has to answer "cancelled" or "refunded" for printed paper,
+which needs the payload. Rendering in the browser: print CSS differs per browser and the
+SRS asks for a server-side PDF. Standard PDF fonts with transliteration: mangling a
+Kazakh name on an admission document is worse than shipping a font.
+
+**Where.** `src/lib/ticket-pdf.ts`, `src/routes/tickets.ts`, `assets/fonts/`,
+`web/src/api.ts`, `web/src/app/tickets/page.tsx`, the "Printable ticket (PDF)" part of
+`docs/api.md`.

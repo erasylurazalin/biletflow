@@ -684,6 +684,29 @@ it whenever it returns a ticket, so changing the secret invalidates every old QR
 
 The app sends the whole string back to the server. It does not parse or trust it.
 
+### Printable ticket (PDF)
+
+`GET /api/tickets/:id/pdf` answers `application/pdf`: a one-page A4 ticket the attendee
+prints from any viewer (SRS 4.11, UC7, criterion 4). It needs a token and is for the
+ticket's owner only: anybody else's ticket is `404 TICKET_NOT_FOUND`, the same as
+`GET /api/tickets/:id`. A plain bad id is `400 VALIDATION_ERROR`.
+
+The response carries `Content-Disposition: attachment; filename="biletflow-<code>.pdf"`.
+
+Every status prints, `cancelled` and `refunded` included: the status is on the page and
+the QR code is the ticket's own `qr_payload`, so a printed copy and the phone are one
+admission and the door scanner decides what is valid, exactly as it does for the app.
+
+The page carries the event title, its date and time in Kazakhstan time, the venue name
+and address, the ticket type, the attendee name, the ticket code, the ticket's status,
+and the QR code, and nothing else. It carries no price, no payment data, no currency and
+no email address (SRS 4.11).
+
+The QR code is black on white with a quiet zone, at least 60 mm square, at error
+correction level Q, so a grayscale print on ordinary A4 still decodes. The PDF is
+generated from the ticket record on every request, by `src/lib/ticket-pdf.ts`, with an
+embedded DejaVu font so Kazakh and Russian event and attendee names print correctly.
+
 ---
 
 ## Staff assignments (organizer)
