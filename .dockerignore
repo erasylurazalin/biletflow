@@ -1,0 +1,9 @@
+# Keep the API build context small and free of anything machine-specific.
+.git
+node_modules
+dist
+.env
+.env.*
+backups
+web
+mobile
