@@ -20,12 +20,12 @@
  */
 import { randomBytes } from 'node:crypto';
 import { Router } from 'express';
-import type { PoolClient } from 'pg';
 import QRCode from 'qrcode';
 import { z } from 'zod';
 import { pool } from '../db/pool';
 import { withTransaction } from '../db/transaction';
 import { recordAudit } from '../lib/audit';
+import { campaignReport, type CampaignReport } from '../lib/campaigns';
 import { AppError, ErrorCode } from '../lib/errors';
 import { webUrl } from '../lib/mailer';
 import { requireAuth } from '../middleware/auth';
@@ -80,61 +80,8 @@ interface CampaignDbRow {
   created_at: Date;
 }
 
-// The rule 11 numbers, computed from the database, never stored (docs/decisions.md).
-interface CampaignReport {
-  redemptions: number;
-  orders: number;
-  tickets_sold: number;
-  gross_revenue: number;
-  discount_total: number;
-  net_revenue: number;
-}
-
-// A redemption counts while its order is paid, or pending and not expired, the same
-// rule as HELD_SQL in routes/ticket-types.ts. Constant SQL, safe to interpolate.
-const LIVE_REDEMPTION_SQL = `(o.status = 'paid'
-      OR (o.status = 'pending' AND (o.expires_at IS NULL OR o.expires_at > now())))`;
-
-// One query per campaign: our campaign lists are short, and keeping it to one
-// statement per campaign keeps the numbers in one place.
-async function campaignReport(
-  db: Pick<PoolClient, 'query'>,
-  campaignId: string,
-): Promise<CampaignReport> {
-  const result = await db.query<{
-    redemptions: number;
-    orders: number;
-    tickets_sold: number;
-    gross_revenue: number;
-    discount_total: number;
-  }>(
-    `SELECT
-       count(r.id) FILTER (WHERE ${LIVE_REDEMPTION_SQL})::int AS redemptions,
-       count(r.id) FILTER (WHERE o.status = 'paid')::int AS orders,
-       COALESCE((SELECT sum(oi.quantity)::int
-                   FROM promo_redemptions r2
-                   JOIN order_items oi ON oi.order_id = r2.order_id
-                   JOIN orders o2 ON o2.id = r2.order_id
-                  WHERE r2.campaign_id = pc.id AND o2.status = 'paid'), 0) AS tickets_sold,
-       COALESCE(sum(o.subtotal) FILTER (WHERE o.status = 'paid'), 0)::int AS gross_revenue,
-       COALESCE(sum(r.discount_amount) FILTER (WHERE o.status = 'paid'), 0)::int AS discount_total
-      FROM promo_campaigns pc
-      LEFT JOIN promo_redemptions r ON r.campaign_id = pc.id
-      LEFT JOIN orders o ON o.id = r.order_id
-     WHERE pc.id = $1
-     GROUP BY pc.id`,
-    [campaignId],
-  );
-  const row = result.rows[0];
-  return {
-    redemptions: row?.redemptions ?? 0,
-    orders: row?.orders ?? 0,
-    tickets_sold: row?.tickets_sold ?? 0,
-    gross_revenue: row?.gross_revenue ?? 0,
-    discount_total: row?.discount_total ?? 0,
-    net_revenue: (row?.gross_revenue ?? 0) - (row?.discount_total ?? 0),
-  };
-}
+// The rule 11 numbers live in lib/campaigns.ts: the analytics dashboard (SRS 4.15)
+// reports the same ones, and they must not drift apart.
 
 // docs/api.md "campaign" object: everything a campaign is, plus the link and the
 // report numbers.

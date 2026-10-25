@@ -175,6 +175,65 @@ export type PromoCampaign = {
   net_revenue: number;
 };
 
+// The event dashboard (docs/api.md "Analytics (organizer)"). Money is in tiyn and every
+// revenue figure is demonstration money, like every payment (SRS 4.6).
+export type EventAnalytics = {
+  event: { id: string; title: string; status: string; starts_at: string };
+  filters: { from: string | null; to: string | null; ticket_type_id: string | null };
+  sales: {
+    capacity: number;
+    held: number;
+    sold: number;
+    remaining: number;
+    percent_sold: number;
+  };
+  revenue: {
+    currency: string;
+    is_demonstration: boolean;
+    gross: number;
+    discounts: number;
+    refunds: number;
+    net: number;
+  };
+  by_ticket_type: {
+    ticket_type_id: string;
+    name: string;
+    price: number;
+    is_hidden: boolean;
+    capacity: number;
+    sold: number;
+    remaining: number;
+    gross: number;
+    registered: number;
+    checked_in: number;
+    absent: number;
+  }[];
+  check_in: { registered: number; checked_in: number; absent: number; percent: number };
+  over_time: {
+    date: string;
+    orders: number;
+    tickets: number;
+    gross: number;
+    discounts: number;
+    net: number;
+  }[];
+  campaigns: {
+    id: string;
+    name: string;
+    code: string;
+    is_active: boolean;
+    redemptions: number;
+    orders: number;
+    tickets_sold: number;
+    gross_revenue: number;
+    discount_total: number;
+    net_revenue: number;
+  }[];
+};
+
+// A plain date (2026-10-20) means that whole day in Kazakhstan time, server side.
+export type AnalyticsFilters = { from?: string; to?: string; ticket_type_id?: string };
+
 export type PaidSales = {
   event_id: string;
   status: 'inactive' | 'active';
@@ -319,14 +378,11 @@ export async function payOrder(
   orderId: string,
   simulateFailure = false,
 ): Promise<Order> {
-  const body = await apiSend<{ order: Order }>(
-    `/api/orders/${encodeURIComponent(orderId)}/pay`,
-    {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(simulateFailure ? { simulate_failure: true } : {}),
-    },
-  );
+  const body = await apiSend<{ order: Order }>(`/api/orders/${encodeURIComponent(orderId)}/pay`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(simulateFailure ? { simulate_failure: true } : {}),
+  });
   return body.order;
 }
 
@@ -336,6 +392,22 @@ export async function listEventOrders(eventId: string, token: string): Promise<O
     { headers: { Authorization: `Bearer ${token}` } },
   );
   return body.orders;
+}
+
+export async function getEventAnalytics(
+  eventId: string,
+  token: string,
+  filters: AnalyticsFilters = {},
+): Promise<EventAnalytics> {
+  const params = new URLSearchParams();
+  if (filters.from) params.set('from', filters.from);
+  if (filters.to) params.set('to', filters.to);
+  if (filters.ticket_type_id) params.set('ticket_type_id', filters.ticket_type_id);
+  const search = params.toString();
+  return apiSend<EventAnalytics>(
+    `/api/events/${encodeURIComponent(eventId)}/analytics${search ? `?${search}` : ''}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
 }
 
 export async function refundOrder(
@@ -602,14 +674,18 @@ export async function setPromoCampaignActive(
 
 // Public: what a campaign link promises. 404 PROMO_CAMPAIGN_NOT_FOUND for a dead link.
 export async function getPromoByToken(token: string): Promise<PromoInfo> {
-  const body = await apiGet<{ promo: PromoInfo }>(
-    `/api/promo/${encodeURIComponent(token)}`,
-  );
+  const body = await apiGet<{ promo: PromoInfo }>(`/api/promo/${encodeURIComponent(token)}`);
   return body.promo;
 }
 
 export function formatPrice(tiyn: number): string {
   if (tiyn === 0) return 'Free';
+  return `${Math.round(tiyn / 100).toLocaleString('ru-KZ')} ₸`;
+}
+
+// Money for figures that are not a ticket price: revenue of 0 is "0 ₸", not "Free"
+// (formatPrice is for ticket types, where 0 means the ticket costs nothing).
+export function formatMoney(tiyn: number): string {
   return `${Math.round(tiyn / 100).toLocaleString('ru-KZ')} ₸`;
 }
 
