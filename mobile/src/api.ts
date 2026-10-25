@@ -1,16 +1,37 @@
 import Constants from "expo-constants";
 import { getAuth, setAuth } from "@/auth";
 
-const DEV_SERVER_IP = Constants.manifest2.extra.expoClient.hostUri.split(":")[0]; // <- gets dev server's LOCAL ip
+// The dev machine's LAN IP comes from the Expo dev server host (see README):
+// `expoConfig.hostUri` is "192.168.x.x:8081" while running from Expo Go.
+// The API itself runs on port 3000 on the same machine.
+const DEV_SERVER_IP = (Constants.expoConfig?.hostUri ?? "localhost").split(":")[0];
 const API_URL = `http://${DEV_SERVER_IP}:3000/api`;
 
+// Every API error carries the shape from docs/api.md ("Errors"):
+// { error: { code, message } }. `status` is the HTTP status code,
+// 0 when the request never reached the server.
+export class ApiError extends Error {
+    readonly code: string;
+    readonly status: number;
+
+    constructor(message: string, code: string, status: number) {
+        super(message);
+        this.name = "ApiError";
+        this.code = code;
+        this.status = status;
+    }
+}
+
 export type User = {
-    id : string;
-    email : string;
-    name : string;
-    role : "attendee" | "organizer" | "event_admin" | "platform_admin";
+    id: string;
+    email: string;
+    name: string;
+    role: "attendee" | "organizer" | "event_admin" | "platform_admin";
 };
 
+export type EventStatus = "draft" | "published" | "cancelled";
+
+// Same item shape as GET /api/events; this is what GET /api/staff/events returns.
 export type EventListItem = {
     id: string;
     title: string;
@@ -19,232 +40,147 @@ export type EventListItem = {
     venue_address: string;
     starts_at: string;
     ends_at: string;
-    status: "draft" | "published" | "cancelled" ;
-    cover_image_url: string;
-    organizer: { 
-        id: string; 
+    status: EventStatus;
+    cover_image_url: string | null;
+    organizer: {
+        id: string;
         name: string;
     };
 };
 
-export type EventDetail = EventListItem & {
-    ticket_types: TicketType[];
-}
+export type TicketStatus = "valid" | "checked_in" | "cancelled" | "refunded";
 
-type EventListResponse = {
-    events : EventListItem[];
-    limit : number;
-    offset : number;
-}
-
-type TicketType = {
-    id : string;
-    name : string;
-    price : number;
-    currency : string;
-    quantity_total : number;
-    quantity_available : number;
-    sales_start_at : string | null;
-    sales_end_at : string | null;
-    is_hidden : boolean;
+// A check-in ticket, docs/api.md "Check-in (mobile app)".
+export type CheckInTicket = {
+    id: string;
+    code: string;
+    status: TicketStatus;
+    attendee_name: string;
+    ticket_type_name: string;
+    checked_in_at: string | null;
 };
 
-type OrderItem = {
-    ticket_type_id : string;
-    name : string;
-    quantity : number;
-    unit_price : number;
+export type CheckInResult =
+    | "valid"
+    | "already_used"
+    | "cancelled"
+    | "refunded"
+    | "invalid"
+    | "not_found"
+    | "wrong_event";
+
+export type CheckInResponse = {
+    result: CheckInResult;
+    ticket: CheckInTicket | null;
+    checked_in_at: string | null;
 };
 
-export type OrderRequest = {
-    ticket_type_id: string;
-    quantity: number;
+export type AttendeeCounts = {
+    registered: number;
+    checked_in: number;
 };
 
-export type Order = {
-    id : string;
-    status : "pending" | "paid" | "cancelled" | "refunded";
-    event : {
-        id : string;
-        title: string;
-    }; 
-    items : OrderItem[];
-    subtotal : number;
-    discount : number;
-    total : number;
-    created_at : string | null;
-    expires_at : string | null;
-    tickets : Ticket[] | null;
-};
-
-export type Ticket = {
-    id : string;
-    code : string;
-    status : "valid" | "checked_in" | "cancelled" | "refunded";
-    attendee_name : string;
-    ticket_type_name : string;
-    event : {
-        id : string;
-        title : string;
-        starts_at : string;
-        venue_name : string;
-    };
-    qr_payload : string;
-};
-
-type CheckInResponse = {
-    result : "valid" | "already_used" | "cancelled" | "refunded" | "not_found" | "wrong_event";
-    ticket : Ticket | null;
-    checked_in_at : string | null;
+export type AttendeesResponse = {
+    attendees: CheckInTicket[];
+    counts: AttendeeCounts;
+    limit: number;
+    offset: number;
 };
 
 type AuthResponse = {
     user: User;
     token: string;
-}
+};
 
-
-
-async function apiGet<T> (path: string): Promise<T> {
+async function request<T>(path: string, options: { method?: string; body?: object } = {}): Promise<T> {
     const url = `${API_URL}${path}`;
-    let response : Response;
+    const token = await getAuth();
+    const headers: Record<string, string> = {};
+    if (token !== null) {
+        headers["Authorization"] = `Bearer ${token}`;
+    }
+    if (options.body !== undefined) {
+        headers["Content-Type"] = "application/json";
+    }
+
+    let response: Response;
     try {
         response = await fetch(url, {
-            method: "GET",
-            headers: {
-                "Authorization" : `Bearer ${await getAuth() ?? ""}`
+            method: options.method ?? "GET",
+            headers,
+            body: options.body === undefined ? undefined : JSON.stringify(options.body),
+        });
+    } catch {
+        throw new ApiError(
+            "Cannot reach the server. Check that you are on the same Wi-Fi as the computer running the API.",
+            "NETWORK_ERROR",
+            0,
+        );
+    }
+
+    if (!response.ok) {
+        let message = `Request failed (HTTP ${response.status})`;
+        let code = "UNKNOWN_ERROR";
+        try {
+            const data = (await response.json()) as { error?: { code?: string; message?: string } };
+            if (typeof data?.error?.message === "string") {
+                message = data.error.message;
             }
-        });
-    } catch (error) {
-        // TODO: Dedicated api error handling
-        throw new Error(`Failed to get from ${url}: ${error}`);
+            if (typeof data?.error?.code === "string") {
+                code = data.error.code;
+            }
+        } catch {
+            // not JSON, keep the fallback message
+        }
+        throw new ApiError(message, code, response.status);
     }
+
     return (await response.json()) as T;
 }
 
-async function apiOther<T>(path: string, request: string, what?: object): Promise<T> {
-    const url = `${API_URL}${path}`;
-    let response : Response;
-    try {
-        response = await fetch(url, {
-            method: request,
-            headers: {
-                "Authorization" : `Bearer ${await getAuth() ?? ""}`,
-                "Content-Type": "appliction/json"
-            },
-            body: JSON.stringify(what ?? {})
-        });
-    } catch (error) {
-        // TODO: Dedicated api error handling
-        throw new Error(`Failed to post to ${url}: ${error}`);
+    // GET REQUESTS
+
+export async function listStaffEvents(): Promise<EventListItem[]> {
+    return (await request<{ events: EventListItem[] }>("/staff/events")).events;
+}
+
+export async function listAttendees(eventId: string, q?: string): Promise<AttendeesResponse> {
+    const params = new URLSearchParams({ limit: "100", offset: "0" });
+    if (q !== undefined && q.trim() !== "") {
+        params.set("q", q.trim());
     }
-    return (await response.json()) as T;
+    return request<AttendeesResponse>(
+        `/staff/events/${encodeURIComponent(eventId)}/attendees?${params.toString()}`,
+    );
 }
 
-async function apiPost (path: string, body?: object) {
-    return apiOther(path, "POST", body);
+export async function getUser(): Promise<User> {
+    return (await request<{ user: User }>("/auth/me")).user;
 }
-
-async function apiPatch(path: string, body?: object) {
-    return apiOther(path, "PATCH", body);
-}
-
-async function apiDelete(path: string, body?: object) {
-    return apiOther(path, "DELETE", body);
-}
-
-
-    // GET REQUESTS (that work without auth)
-
-export async function listEvents(): Promise<EventListItem[]> {
-    return (await apiGet<EventListResponse>('/events')).events;
-}
-
-export async function getEvent(id: string): Promise<EventDetail> {
-    return (await apiGet<{ event: EventDetail }>(`/events/${encodeURIComponent(id)}`)).event;
-}
-
-export async function listOrders() /* : Promise<Order[]> */ {
-
-}
-
-export async function getOrder(id: string) /* : Promise<Order> */ {
-    
-}
-
-export async function listTickets() /* : Promise<Ticket[]> */ {
-
-}
-
-export async function getTicket(id: string) /* : Promise<Ticket> */ {
-    
-}
-
-export async function listStaffEvents() /* : Promise<Event> */ {
-    
-}
-
-export async function listStaffEventAttedees(id: string) /* : Promise<User> */ {
-    
-}
-
-export async function getUser() /* : Promise<User> */ { // /auth/me
-    return (await apiGet<{user : User}>("/api/auth/me")).user;
-}
-
 
     // POST REQUESTS
 
-export async function checkin(qrPayload: string) /* : Promise<CheckInResponse> */ {
-    
+export async function loginUser(email: string, password: string): Promise<User> {
+    const response = await request<AuthResponse>("/auth/login", {
+        method: "POST",
+        body: { email, password },
+    });
+    await setAuth(response.token);
+    return response.user;
 }
 
-export async function undoCheckin(ticketId: string) {
-
+export async function checkIn(eventId: string, qrPayload: string): Promise<CheckInResponse> {
+    return request<CheckInResponse>("/staff/check-in", {
+        method: "POST",
+        body: { event_id: eventId, qr_payload: qrPayload },
+    });
 }
 
-export async function registerUser(email: string, password: string, name: string) /* : Promise<AuthResponse> */ {
-
-}
-
-export async function loginUser(email: string, password: string) {
-
-}
-
-export async function createEvent(event: EventDetail) {
-
-}
-
-export async function publishEvent(eventId: string) {
-
-}
-
-export async function addEventTickets(eventId: string, tickets: TicketType[]) {
-
-}
-
-export async function createOrder(eventId: string, items: OrderRequest[]) {
-
-}
-
-export async function payOrder(orderId: string) {
-
-}
-
-
-    //PATCH REQUESTS
-
-export async function editEventTickets(ticketTypeId: string) {
-
-}
-
-export async function editEvent(eventId: string) {
-
-}
-
-
-    //DELETE REQUESTS
-
-export async function removeEventTickets(ticketTypeId: string) {
-
+export async function undoCheckIn(ticketId: string): Promise<CheckInTicket> {
+    return (
+        await request<{ ticket: CheckInTicket }>(
+            `/staff/check-in/${encodeURIComponent(ticketId)}/undo`,
+            { method: "POST" },
+        )
+    ).ticket;
 }

@@ -1,24 +1,39 @@
 # BiletFlow mobile
 
-Mobile front-end built using React Native and Expo framework. Currently implemented:
-   * Main page: lists public events
-   * Event page: event details
-   * Check-in page: post request to the api and works based on the response
+The door scanner for event staff. A staff member logs in, sees the events they
+are assigned to, scans ticket QR codes at the door, checks people in, undoes a
+mistaken check-in and searches the attendee list.
 
-Requires starting the API from the root first: `docker compose up -d`, `npm run migrate`, `npm run seed`, `npm run dev`.
+## Run it
 
-To start the app:
+Start the API first, from the repository root:
+
+```
+npm ci
+cp .env.example .env
+docker compose up -d
+npm run migrate
+npm run seed
+npm run dev          # API on http://localhost:3000
+```
+
+Then the app:
+
 ```
 cd mobile
 npm ci
 npx expo start
 ```
 
-Opens on exp://[dev server's local IP address]:8081 on mobile or http://localhost:8081 on web (for testing)
+Open it in Expo Go on a phone on the same Wi-Fi as the computer running the API
+(scan the QR code from the `expo start` output). The app finds the API through
+the dev server's LAN address and calls it on port 3000, so the dev machine must
+accept connections on port 3000 from the local network. On Linux, allow it with
+`sudo ufw allow 3000/tcp` if a firewall is running.
 
-In the output, you'll find options to open the app in a
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+## Test logins (seeded)
 
+- Door staff: `door@biletflow.kz` / `biletflow-dev`, assigned to the Astana Tech Meetup.
+- Attendee with tickets: `attendee@biletflow.kz` / `biletflow-dev`. Their seeded
+  ticket QR codes are shown in the web app (http://localhost:3001) under
+  My tickets, so there is something to scan at the door.
