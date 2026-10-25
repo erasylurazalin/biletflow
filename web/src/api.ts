@@ -104,6 +104,7 @@ export type Order = {
   discount: number;
   processing_fee: number;
   total: number;
+  promo: { code: string; campaign_name: string } | null;
   created_at: string;
   expires_at: string | null;
   payment: SimulatedPayment | null;
@@ -126,6 +127,52 @@ export type OrganizerOrder = {
   checked_in_count: number;
   created_at: string;
   refund: SimulatedRefund | null;
+};
+
+// One covered ticket type of a promo campaign, with what the event page needs to
+// offer it once the code is applied (hidden types included).
+export type PromoTicketType = {
+  id: string;
+  name: string;
+  price: number;
+  quantity_available: number;
+};
+
+// What GET /api/promo/:token answers for a campaign link.
+export type PromoInfo = {
+  code: string;
+  event_id: string;
+  campaign_name: string;
+  discount_type: 'percent' | 'fixed';
+  discount_value: number;
+  ticket_type_ids: string[] | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  ticket_types: PromoTicketType[];
+};
+
+// One campaign as the event's organizer sees it, with the report numbers.
+export type PromoCampaign = {
+  id: string;
+  event_id: string;
+  name: string;
+  code: string;
+  token: string;
+  discount_type: 'percent' | 'fixed';
+  discount_value: number;
+  starts_at: string | null;
+  ends_at: string | null;
+  max_redemptions: number | null;
+  ticket_type_ids: string[] | null;
+  is_active: boolean;
+  created_at: string;
+  link: string;
+  redemptions: number;
+  orders: number;
+  tickets_sold: number;
+  gross_revenue: number;
+  discount_total: number;
+  net_revenue: number;
 };
 
 export type PaidSales = {
@@ -232,11 +279,16 @@ export async function createOrder(
   token: string,
   eventId: string,
   items: { ticket_type_id: string; quantity: number; attendee_names?: string[] }[],
+  promoCode?: string,
 ): Promise<Order> {
   const body = await apiSend<{ order: Order }>('/api/orders', {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ event_id: eventId, items }),
+    body: JSON.stringify({
+      event_id: eventId,
+      items,
+      ...(promoCode && { promo_code: promoCode }),
+    }),
   });
   return body.order;
 }
@@ -484,6 +536,76 @@ export async function listEvents(): Promise<EventListItem[]> {
 export async function getEvent(id: string): Promise<EventDetail> {
   const body = await apiGet<{ event: EventDetail }>(`/api/events/${encodeURIComponent(id)}`);
   return body.event;
+}
+
+export type PromoCampaignInput = {
+  name: string;
+  discount_type: 'percent' | 'fixed';
+  discount_value: number;
+  code?: string;
+  starts_at?: string;
+  ends_at?: string;
+  max_redemptions?: number;
+  ticket_type_ids?: string[] | null;
+};
+
+// The event's ticket types (hidden ones included) come back with the list, because
+// the create form offers them and the public event detail leaves hidden types out.
+export type PromoCampaignListResponse = {
+  campaigns: PromoCampaign[];
+  ticket_types: { id: string; name: string; price: number; is_hidden: boolean }[];
+  limit: number;
+  offset: number;
+};
+
+export async function listPromoCampaigns(
+  eventId: string,
+  token: string,
+): Promise<PromoCampaignListResponse> {
+  return apiSend<PromoCampaignListResponse>(
+    `/api/events/${encodeURIComponent(eventId)}/promo-campaigns?limit=100`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+}
+
+export async function createPromoCampaign(
+  eventId: string,
+  input: PromoCampaignInput,
+  token: string,
+): Promise<PromoCampaign> {
+  const body = await apiSend<{ campaign: PromoCampaign }>(
+    `/api/events/${encodeURIComponent(eventId)}/promo-campaigns`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    },
+  );
+  return body.campaign;
+}
+
+export async function setPromoCampaignActive(
+  campaignId: string,
+  isActive: boolean,
+  token: string,
+): Promise<PromoCampaign> {
+  const body = await apiSend<{ campaign: PromoCampaign }>(
+    `/api/promo-campaigns/${encodeURIComponent(campaignId)}`,
+    {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_active: isActive }),
+    },
+  );
+  return body.campaign;
+}
+
+// Public: what a campaign link promises. 404 PROMO_CAMPAIGN_NOT_FOUND for a dead link.
+export async function getPromoByToken(token: string): Promise<PromoInfo> {
+  const body = await apiGet<{ promo: PromoInfo }>(
+    `/api/promo/${encodeURIComponent(token)}`,
+  );
+  return body.promo;
 }
 
 export function formatPrice(tiyn: number): string {

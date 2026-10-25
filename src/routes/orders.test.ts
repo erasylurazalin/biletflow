@@ -156,12 +156,13 @@ describe('POST /api/orders', () => {
       created_at: CREATED_AT,
       expires_at: EXPIRES_AT,
       payment: null,
+      promo: null,
       refund: null,
       tickets: [],
     });
     // Prices come from the locked rows: subtotal 2 x 500000, plus a 3% fee.
     const insert = query.mock.calls.find((call) => sqlOf(call).startsWith('INSERT INTO orders'));
-    expect(insert?.[1]).toEqual([BUYER_ID, EVENT_ID, 1000000, 0, 30000, 1030000]);
+    expect(insert?.[1]).toEqual([BUYER_ID, EVENT_ID, 1000000, 0, 30000, 1030000, null]);
     // The ticket types are locked before anything is counted.
     expect(statements().findIndex((s) => s.includes('FOR UPDATE'))).toBeLessThan(
       statements().findIndex((s) => s.includes('AS available')),
@@ -293,7 +294,7 @@ describe('POST /api/orders', () => {
     expect(res.status).toBe(201);
     expect(res.body.order).toMatchObject({ subtotal: 0, processing_fee: 0, total: 0 });
     const insert = query.mock.calls.find((call) => sqlOf(call).startsWith('INSERT INTO orders'));
-    expect(insert?.[1]).toEqual([BUYER_ID, EVENT_ID, 0, 0, 0, 0]);
+    expect(insert?.[1]).toEqual([BUYER_ID, EVENT_ID, 0, 0, 0, 0, null]);
   });
 
   it('returns 409 CONFLICT for a cancelled event', async () => {

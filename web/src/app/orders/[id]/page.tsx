@@ -119,6 +119,9 @@ function Checkout() {
       </ul>
       <div className="mt-4 space-y-1 text-sm">
         <p>Tickets: {formatPrice(order.subtotal)}</p>
+        {order.discount > 0 ? (
+          <p>Discount ({order.promo?.code ?? 'promo'}): -{formatPrice(order.discount)}</p>
+        ) : null}
         {order.processing_fee > 0 ? (
           <p>Processing charge (3%): {formatPrice(order.processing_fee)}</p>
         ) : null}
