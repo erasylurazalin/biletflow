@@ -10,15 +10,15 @@ import {
   listMyTickets,
   type Ticket,
 } from '@/api';
+import { useI18n } from '@/i18n/client';
+import { errorText } from '@/i18n/errors';
+import { fill } from '@/i18n/format';
 import { clearSession, readToken } from '@/session';
 import { TicketQr } from '@/ticket-qr';
 
-function statusLabel(ticket: Ticket): string {
-  return ticket.status === 'checked_in' ? 'Checked in' : ticket.status;
-}
-
 export default function TicketsPage() {
   const router = useRouter();
+  const { locale, t } = useI18n();
   const [tickets, setTickets] = useState<Ticket[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   // The ticket whose PDF is being fetched, so only its button says "Preparing…".
@@ -44,14 +44,14 @@ export default function TicketsPage() {
           clearSession();
           router.replace('/login?next=/tickets');
         } else {
-          setError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.');
+          setError(errorText(err, t));
         }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [router]);
+  }, [router, t]);
 
   // Fetched with the token, then handed to the browser as a download: the PDF is a
   // server-rendered document, never a link the browser opens on its own.
@@ -78,7 +78,7 @@ export default function TicketsPage() {
         router.replace('/login?next=/tickets');
         return;
       }
-      setError(err instanceof ApiError ? err.message : 'Could not prepare the PDF. Try again.');
+      setError(err instanceof ApiError ? errorText(err, t) : t.tickets.pdfError);
     } finally {
       setPending(null);
     }
@@ -86,20 +86,20 @@ export default function TicketsPage() {
 
   return (
     <div className="mx-auto max-w-3xl">
-      <h1 className="text-2xl font-semibold">My tickets</h1>
+      <h1 className="text-2xl font-semibold">{t.tickets.title}</h1>
       {error ? (
         <p role="alert" className="mt-6 rounded-md bg-red-50 p-3 text-sm text-red-700">
           {error}
         </p>
       ) : null}
       {tickets === null && error === null ? (
-        <p className="mt-6 text-sm text-zinc-600">Loading tickets…</p>
+        <p className="mt-6 text-sm text-zinc-600">{t.tickets.loading}</p>
       ) : null}
       {tickets?.length === 0 ? (
         <p className="mt-6 text-sm text-zinc-600">
-          No tickets yet.{' '}
+          {t.tickets.empty}{' '}
           <Link href="/" className="font-medium text-zinc-900 underline">
-            Browse events
+            {t.tickets.browse}
           </Link>
         </p>
       ) : null}
@@ -121,12 +121,14 @@ export default function TicketsPage() {
                       {ticket.event.title}
                     </Link>
                     <p className="mt-1 text-sm text-zinc-600">
-                      {formatWhen(ticket.event.starts_at)} · {ticket.event.venue_name}
+                      {formatWhen(ticket.event.starts_at, locale)} · {ticket.event.venue_name}
                     </p>
                     <p className="mt-4 text-sm font-medium">{ticket.ticket_type_name}</p>
                     <p className="mt-1 text-sm text-zinc-600">{ticket.attendee_name}</p>
                     <p className="mt-3 font-mono text-sm">{ticket.code}</p>
-                    <p className="mt-2 text-sm text-zinc-600">Status: {statusLabel(ticket)}</p>
+                    <p className="mt-2 text-sm text-zinc-600">
+                      {fill(t.common.status, { status: t.ticketStatus[ticket.status] })}
+                    </p>
                   </div>
                   <div className="shrink-0 space-y-3 self-center sm:self-start">
                     {ticket.status === 'valid' ? <TicketQr payload={ticket.qr_payload} /> : null}
@@ -137,7 +139,7 @@ export default function TicketsPage() {
                       disabled={pending === ticket.id}
                       className="w-[240px] rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-medium hover:bg-zinc-50 disabled:opacity-60"
                     >
-                      {pending === ticket.id ? 'Preparing…' : 'Download PDF'}
+                      {pending === ticket.id ? t.tickets.preparing : t.tickets.downloadPdf}
                     </button>
                   </div>
                 </div>

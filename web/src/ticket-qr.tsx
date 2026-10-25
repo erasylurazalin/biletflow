@@ -2,8 +2,10 @@
 
 import QRCode from 'qrcode';
 import { useEffect, useState } from 'react';
+import { useI18n } from '@/i18n/client';
 
 export function TicketQr({ payload }: { payload: string }) {
+  const { t } = useI18n();
   const [generated, setGenerated] = useState<{ payload: string; dataUrl: string } | null>(null);
 
   useEffect(() => {
@@ -26,6 +28,6 @@ export function TicketQr({ payload }: { payload: string }) {
 
   return (
     // eslint-disable-next-line @next/next/no-img-element
-    <img src={dataUrl} alt="Ticket QR code" width={240} height={240} className="bg-white" />
+    <img src={dataUrl} alt={t.tickets.qrAlt} width={240} height={240} className="bg-white" />
   );
 }

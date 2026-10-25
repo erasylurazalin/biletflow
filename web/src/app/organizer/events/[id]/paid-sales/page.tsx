@@ -14,12 +14,16 @@ import {
   acceptPaidSalesTerms,
   activatePaidSales,
   ApiError,
+  formatMoney,
   getPaidSales,
   payActivationFee,
   savePayoutAccount,
   verifyOrganizerIdentity,
   type PaidSales,
 } from '@/api';
+import { useI18n } from '@/i18n/client';
+import { errorText } from '@/i18n/errors';
+import { fill } from '@/i18n/format';
 import { clearSession, readToken } from '@/session';
 
 const fieldClass =
@@ -38,6 +42,7 @@ function ChecklistItem({
   done: boolean;
   children: ReactNode;
 }) {
+  const { t } = useI18n();
   return (
     <section className="rounded-lg border border-zinc-200 bg-white p-5">
       <div className="flex items-center justify-between gap-4">
@@ -49,7 +54,7 @@ function ChecklistItem({
             done ? 'bg-green-100 text-green-800' : 'bg-zinc-100 text-zinc-600'
           }`}
         >
-          {done ? 'Done' : 'Not done'}
+          {done ? t.paidSales.done : t.paidSales.notDone}
         </span>
       </div>
       <div className="mt-3 text-sm text-zinc-600">{children}</div>
@@ -60,6 +65,7 @@ function ChecklistItem({
 function PaidSalesChecklist() {
   const { id: eventId } = useParams<{ id: string }>();
   const router = useRouter();
+  const { locale, t } = useI18n();
   const [paidSales, setPaidSales] = useState<PaidSales | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -74,12 +80,12 @@ function PaidSalesChecklist() {
         return;
       }
       if (err instanceof ApiError && err.status === 403) {
-        setError("Only the event's organizer can do this");
+        setError(t.organizer.ownerOnly);
         return;
       }
-      setError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.');
+      setError(errorText(err, t));
     },
-    [router],
+    [router, t],
   );
 
   const refresh = useCallback(async () => {
@@ -156,23 +162,20 @@ function PaidSalesChecklist() {
 
   const checklist = paidSales?.checklist;
   const ready = checklist !== undefined && Object.values(checklist).every(Boolean);
-  const fee = paidSales
-    ? `${(paidSales.activation_fee.amount / 100).toLocaleString('en-US')} ${paidSales.activation_fee.currency}`
-    : '';
+  const fee = paidSales ? formatMoney(paidSales.activation_fee.amount, locale) : '';
+  const [paidTypeBefore, paidTypeAfter] = t.paidSales.paidTypeTodo.split('{link}');
 
   return (
     <div className="mx-auto max-w-2xl">
       <Link href={`/events/${eventId}`} className="text-sm text-zinc-500 hover:text-zinc-800">
-        ← Event
+        {t.organizer.back}
       </Link>
-      <h1 className="mt-4 text-2xl font-semibold">Activate paid sales</h1>
+      <h1 className="mt-4 text-2xl font-semibold">{t.paidSales.title}</h1>
       <p className="mt-2 text-sm text-zinc-600">
-        Complete this checklist for one event. Identity and payout details belong to your
-        organizer profile.
+        {t.paidSales.intro}
       </p>
       <p className="mt-4 rounded-md bg-amber-50 p-3 text-sm text-amber-900">
-        Demonstration only. Identity checks, payments and payouts are simulated. No real money
-        moves.
+        {t.paidSales.demo}
       </p>
 
       {error ? (
@@ -181,31 +184,31 @@ function PaidSalesChecklist() {
         </p>
       ) : null}
 
-      {loading ? <p className="mt-6 text-sm text-zinc-600">Loading checklist…</p> : null}
+      {loading ? <p className="mt-6 text-sm text-zinc-600">{t.paidSales.loading}</p> : null}
       {!loading && !paidSales && error ? (
         <button type="button" onClick={() => void refresh()} className={`${buttonClass} mt-4`}>
-          Try again
+          {t.organizer.tryAgain}
         </button>
       ) : null}
 
       {paidSales && checklist ? (
         <div className="mt-6 space-y-4">
-          <ChecklistItem number={1} title="Paid ticket type" done={checklist.paid_ticket_type}>
+          <ChecklistItem number={1} title={t.paidSales.paidType} done={checklist.paid_ticket_type}>
             {checklist.paid_ticket_type ? (
-              <p>This event has a ticket type with a price above 0.</p>
+              <p>{t.paidSales.paidTypeDone}</p>
             ) : (
               <p>
-                Add a ticket type with a price above 0 in the{' '}
+                {paidTypeBefore}
                 <Link href={`/events/${eventId}`} className="font-medium text-zinc-900 underline">
-                  event ticket types
+                  {t.paidSales.paidTypeLink}
                 </Link>
-                , then reload this checklist.
+                {paidTypeAfter}
               </p>
             )}
           </ChecklistItem>
 
-          <ChecklistItem number={2} title="Simulated identity check" done={checklist.identity_verified}>
-            <p>No documents are checked or stored.</p>
+          <ChecklistItem number={2} title={t.paidSales.identity} done={checklist.identity_verified}>
+            <p>{t.paidSales.identityNote}</p>
             <button
               type="button"
               disabled={pending !== null || checklist.identity_verified}
@@ -217,25 +220,25 @@ function PaidSalesChecklist() {
               className={`${buttonClass} mt-3`}
             >
               {checklist.identity_verified
-                ? 'Identity check complete'
+                ? t.paidSales.identityDone
                 : pending === 'identity'
-                  ? 'Checking…'
-                  : 'Complete simulated identity check'}
+                  ? t.paidSales.identityChecking
+                  : t.paidSales.identityButton}
             </button>
           </ChecklistItem>
 
-          <ChecklistItem number={3} title="Payout account" done={checklist.payout_account}>
-            <p>Demonstration payout details. Nothing is paid to this account.</p>
+          <ChecklistItem number={3} title={t.paidSales.payout} done={checklist.payout_account}>
+            <p>{t.paidSales.payoutNote}</p>
             {checklist.payout_account ? (
-              <p className="mt-2 font-medium text-zinc-800">Payout account saved.</p>
+              <p className="mt-2 font-medium text-zinc-800">{t.paidSales.payoutSaved}</p>
             ) : (
               <form onSubmit={(event) => void submitPayout(event)} className="mt-3 space-y-3">
                 <label className="block text-sm font-medium text-zinc-800">
-                  Bank name
+                  {t.paidSales.bankName}
                   <input name="bank_name" required className={fieldClass} />
                 </label>
                 <label className="block text-sm font-medium text-zinc-800">
-                  IBAN
+                  {t.paidSales.iban}
                   <input
                     name="iban"
                     required
@@ -245,18 +248,18 @@ function PaidSalesChecklist() {
                   />
                 </label>
                 <label className="block text-sm font-medium text-zinc-800">
-                  Account holder
+                  {t.paidSales.accountHolder}
                   <input name="account_holder" required className={fieldClass} />
                 </label>
                 <button type="submit" disabled={pending !== null} className={buttonClass}>
-                  {pending === 'payout' ? 'Saving…' : 'Save payout account'}
+                  {pending === 'payout' ? t.paidSales.saving : t.paidSales.savePayout}
                 </button>
               </form>
             )}
           </ChecklistItem>
 
-          <ChecklistItem number={4} title="Simulated activation fee" done={checklist.activation_fee_paid}>
-            <p>Demonstration payment of {fee}. No real money will be charged.</p>
+          <ChecklistItem number={4} title={t.paidSales.fee} done={checklist.activation_fee_paid}>
+            <p>{fill(t.paidSales.feeNote, { fee })}</p>
             <button
               type="button"
               disabled={pending !== null || checklist.activation_fee_paid}
@@ -264,16 +267,16 @@ function PaidSalesChecklist() {
               className={`${buttonClass} mt-3`}
             >
               {checklist.activation_fee_paid
-                ? 'Demo payment recorded'
+                ? t.paidSales.feeDone
                 : pending === 'fee'
-                  ? 'Recording demo payment…'
-                  : `Pay simulated fee: ${fee}`}
+                  ? t.paidSales.feePaying
+                  : fill(t.paidSales.feeButton, { fee })}
             </button>
           </ChecklistItem>
 
-          <ChecklistItem number={5} title="Paid-event terms" done={checklist.terms_accepted}>
+          <ChecklistItem number={5} title={t.paidSales.terms} done={checklist.terms_accepted}>
             {checklist.terms_accepted ? (
-              <p>Paid-event terms accepted.</p>
+              <p>{t.paidSales.termsDone}</p>
             ) : (
               <>
                 <label className="flex items-start gap-2">
@@ -283,7 +286,7 @@ function PaidSalesChecklist() {
                     onChange={(event) => setTermsAccepted(event.target.checked)}
                     className="mt-1"
                   />
-                  <span>I accept the paid-event terms for this event.</span>
+                  <span>{t.paidSales.termsCheckbox}</span>
                 </label>
                 <button
                   type="button"
@@ -291,7 +294,7 @@ function PaidSalesChecklist() {
                   onClick={() => void perform('terms', (token) => acceptPaidSalesTerms(eventId, token))}
                   className={`${buttonClass} mt-3`}
                 >
-                  {pending === 'terms' ? 'Accepting…' : 'Accept terms'}
+                  {pending === 'terms' ? t.paidSales.accepting : t.paidSales.accept}
                 </button>
               </>
             )}
@@ -304,10 +307,10 @@ function PaidSalesChecklist() {
             className={`${buttonClass} w-full`}
           >
             {paidSales.status === 'active'
-              ? 'Paid sales active'
+              ? t.paidSales.active
               : pending === 'activate'
-                ? 'Activating…'
-                : 'Activate paid sales'}
+                ? t.paidSales.activating
+                : t.paidSales.activate}
           </button>
         </div>
       ) : null}
@@ -316,8 +319,9 @@ function PaidSalesChecklist() {
 }
 
 export default function PaidSalesPage() {
+  const { t } = useI18n();
   return (
-    <Suspense fallback={<p className="text-sm text-zinc-600">Loading checklist…</p>}>
+    <Suspense fallback={<p className="text-sm text-zinc-600">{t.paidSales.loading}</p>}>
       <PaidSalesChecklist />
     </Suspense>
   );
