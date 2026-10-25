@@ -89,6 +89,14 @@ const noPayment = {
   payment_paid_at: null,
 };
 
+// No refund yet either: the LEFT JOIN on refunds found nothing.
+const noRefund = {
+  refund_amount: null,
+  refund_currency: null,
+  refund_is_demonstration: null,
+  refund_paid_at: null,
+};
+
 const PAID_AT = '2026-10-13T10:05:00.000Z';
 
 const orderRow = {
@@ -103,6 +111,7 @@ const orderRow = {
   created_at: CREATED_AT,
   expires_at: EXPIRES_AT,
   ...noPayment,
+  ...noRefund,
 };
 const itemRows = [
   {
@@ -147,6 +156,7 @@ describe('POST /api/orders', () => {
       created_at: CREATED_AT,
       expires_at: EXPIRES_AT,
       payment: null,
+      refund: null,
       tickets: [],
     });
     // Prices come from the locked rows: subtotal 2 x 500000, plus a 3% fee.

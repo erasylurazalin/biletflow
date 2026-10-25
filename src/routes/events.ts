@@ -138,6 +138,7 @@ const idParamSchema = z.object({ id: z.uuid() });
 interface EventDetailRow extends Omit<EventListRow, 'short_description'> {
   description: string;
   paid_sales_active: boolean;
+  refund_policy: string | null;
 }
 
 interface TicketTypeRow {
@@ -170,6 +171,7 @@ eventsRouter.get('/:id', async (req, res, next) => {
               e.ends_at,
               e.status,
               e.cover_image_url,
+              e.refund_policy,
               u.id   AS organizer_id,
               u.name AS organizer_name,
               -- Whether paid ticket types can be bought yet (migration 004).
@@ -232,6 +234,7 @@ eventsRouter.get('/:id', async (req, res, next) => {
         ends_at: event.ends_at,
         status: event.status,
         cover_image_url: event.cover_image_url,
+        refund_policy: event.refund_policy,
         organizer: { id: event.organizer_id, name: event.organizer_name },
         paid_sales_active: event.paid_sales_active,
         ticket_types: ticketTypesResult.rows,
@@ -254,6 +257,9 @@ const createEventSchema = z
     starts_at: z.coerce.date(),
     ends_at: z.coerce.date(),
     cover_image_url: z.url().nullable().optional(),
+    // Free text shown to attendees on the event page. Information only: nothing
+    // enforces it (docs/decisions.md, decision 10).
+    refund_policy: z.string().trim().min(1).max(2000).nullable().optional(),
   })
   .refine((data) => data.ends_at > data.starts_at, {
     message: 'ends_at must be after starts_at',
@@ -274,18 +280,26 @@ eventsRouter.post('/', requireAuth, async (req, res, next) => {
         first ? `Invalid field "${first.path.join('.')}": ${first.message}` : 'Invalid event data',
       );
     }
-    const { title, description, venue_name, venue_address, starts_at, ends_at, cover_image_url } =
-      parsed.data;
+    const {
+      title,
+      description,
+      venue_name,
+      venue_address,
+      starts_at,
+      ends_at,
+      cover_image_url,
+      refund_policy,
+    } = parsed.data;
 
     // New events always start as drafts. Status is not something the client gets to
     // set on creation. Publishing is a separate endpoint (POST /:id/publish).
     const result = await pool.query<EventDetailRow>(
       `WITH inserted AS (
          INSERT INTO events (title, description, venue_name, venue_address, starts_at,
-                              ends_at, cover_image_url, organizer_id, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft')
+                              ends_at, cover_image_url, refund_policy, organizer_id, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft')
          RETURNING id, title, description, venue_name, venue_address, starts_at, ends_at,
-                   status, cover_image_url, organizer_id
+                   status, cover_image_url, refund_policy, organizer_id
        )
        SELECT inserted.*, u.name AS organizer_name
          FROM inserted
@@ -298,6 +312,7 @@ eventsRouter.post('/', requireAuth, async (req, res, next) => {
         starts_at,
         ends_at,
         cover_image_url ?? null,
+        refund_policy ?? null,
         req.user!.id,
       ],
     );
@@ -317,6 +332,7 @@ eventsRouter.post('/', requireAuth, async (req, res, next) => {
         ends_at: event.ends_at,
         status: event.status,
         cover_image_url: event.cover_image_url,
+        refund_policy: event.refund_policy,
         organizer: { id: event.organizer_id, name: event.organizer_name },
       },
     });
@@ -338,6 +354,8 @@ const updateEventSchema = z
     starts_at: z.coerce.date(),
     ends_at: z.coerce.date(),
     cover_image_url: z.url().nullable(),
+    // null clears the policy (docs/api.md "Events").
+    refund_policy: z.string().trim().min(1).max(2000).nullable(),
     // status is deliberately not editable here: publishing is its own endpoint
     // (POST /:id/publish, someone else's task) and PATCH should not race it.
   })
@@ -401,7 +419,7 @@ eventsRouter.patch('/:id', requireAuth, async (req, res, next) => {
           SET ${setClause}
         WHERE id = $${fields.length + 1}
         RETURNING id, title, description, venue_name, venue_address, starts_at, ends_at,
-                  status, cover_image_url, organizer_id`,
+                  status, cover_image_url, refund_policy, organizer_id`,
       [...values, id],
     );
     const event = updateResult.rows[0];
@@ -419,6 +437,7 @@ eventsRouter.patch('/:id', requireAuth, async (req, res, next) => {
         ends_at: event.ends_at,
         status: event.status,
         cover_image_url: event.cover_image_url,
+        refund_policy: event.refund_policy,
         organizer: { id: event.organizer_id, name: owner.organizer_name },
       },
     });
@@ -447,12 +466,14 @@ function toOwnedEvent(event: EventDetailRow, organizerName: string) {
     ends_at: event.ends_at,
     status: event.status,
     cover_image_url: event.cover_image_url,
+    refund_policy: event.refund_policy,
     organizer: { id: event.organizer_id, name: organizerName },
   };
 }
 
 const EVENT_FOR_UPDATE = `SELECT e.id, e.title, e.description, e.venue_name, e.venue_address,
-         e.starts_at, e.ends_at, e.status, e.cover_image_url, e.organizer_id,
+         e.starts_at, e.ends_at, e.status, e.cover_image_url, e.refund_policy,
+         e.organizer_id,
          u.name AS organizer_name, e.starts_at <= now() AS start_time_passed
     FROM events e
     JOIN users u ON u.id = e.organizer_id
@@ -501,7 +522,7 @@ eventsRouter.post('/:id/publish', requireAuth, async (req, res, next) => {
         `UPDATE events SET status = 'published'
           WHERE id = $1
           RETURNING id, title, description, venue_name, venue_address, starts_at, ends_at,
-                    status, cover_image_url, organizer_id`,
+                    status, cover_image_url, refund_policy, organizer_id`,
         [id],
       );
       const updated = updateResult.rows[0];
@@ -554,7 +575,7 @@ eventsRouter.post('/:id/cancel', requireAuth, async (req, res, next) => {
         `UPDATE events SET status = 'cancelled'
           WHERE id = $1
           RETURNING id, title, description, venue_name, venue_address, starts_at, ends_at,
-                    status, cover_image_url, organizer_id`,
+                    status, cover_image_url, refund_policy, organizer_id`,
         [id],
       );
       const updated = updateResult.rows[0];

@@ -34,6 +34,7 @@ import { recordAudit } from '../lib/audit';
 import { AppError, ErrorCode } from '../lib/errors';
 import { sendEmail, webUrl } from '../lib/mailer';
 import { PAYMENT_COLUMNS, toPayment, type PaymentColumns } from '../lib/payments';
+import { REFUND_COLUMNS, toRefund, type RefundColumns } from '../lib/refunds';
 import { requireAuth } from '../middleware/auth';
 import { HELD_SQL } from './ticket-types';
 import { TICKET_SELECT, toTicket, type TicketRow } from './tickets';
@@ -69,12 +70,14 @@ const ORDER_SELECT = `SELECT o.id,
          o.total,
          o.created_at,
          o.expires_at,
-         ${PAYMENT_COLUMNS}
+         ${PAYMENT_COLUMNS},
+         ${REFUND_COLUMNS}
     FROM orders o
     JOIN events e ON e.id = o.event_id
-    LEFT JOIN payments pay ON pay.order_id = o.id`;
+    LEFT JOIN payments pay ON pay.order_id = o.id
+    LEFT JOIN refunds rf ON rf.order_id = o.id`;
 
-interface OrderRow extends PaymentColumns {
+interface OrderRow extends PaymentColumns, RefundColumns {
   id: string;
   status: string;
   event_id: string;
@@ -116,6 +119,7 @@ function toOrder(row: OrderRow, items: OrderItemRow[], tickets?: TicketRow[]) {
     created_at: row.created_at,
     expires_at: row.expires_at,
     payment: toPayment(row),
+    refund: toRefund(row),
     ...(tickets && { tickets: tickets.map(toTicket) }),
   };
 }

@@ -195,12 +195,19 @@ POST   /api/events/:id/cancel         draft or published -> cancelled
   "cover_image_url": "https://...",
   "organizer": { "id": "uuid", "name": "..." },
   "paid_sales_active": false,
+  "refund_policy": "Tickets are refundable in full until the event starts.",
   "ticket_types": [ ... ]
 }
 ```
 
 `paid_sales_active` says whether ticket types with a price above `0` can be bought
 (see "Paid sales activation"). When it is `false`, show paid types as not on sale yet.
+
+`refund_policy` is optional free text, at most 2000 characters, shown to attendees
+under a "Refund policy" heading on the event page. It is information only: nothing
+enforces it, and refunds work the same way with no policy set. Set and clear it
+through `POST /api/events` and `PATCH /api/events/:id` (`null` clears). It appears in
+every full event response (detail, create, update, publish, cancel), not in the list.
 
 The list endpoint returns events **without** `ticket_types` and `paid_sales_active`, and with a shortened
 description. Detail returns everything. Frontend should not assume list items are
@@ -286,9 +293,25 @@ GET  /api/orders/:id
   "created_at": "...",
   "expires_at": "...",     // pending orders die after 15 min; null once paid
   "payment": { ... } | null, // null until paid, and for free orders
+  "refund": { ... } | null,  // null unless the organizer refunded the order
   "tickets": [ ... ]        // empty until paid
 }
 ```
+
+```json
+"refund": {
+  "method": "simulated",
+  "is_demonstration": true,
+  "amount": 1030000,
+  "currency": "KZT",
+  "refunded_at": "..."
+}
+```
+
+**Every refund is demonstration data**, like every payment (SRS 4.6). No money moves.
+`is_demonstration` is always `true` in the academic MVP, and clients must show it,
+for example as "Refunded 10,300 ₸ (simulated)". The attendee sees the refund through
+`GET /api/orders/:id`; the organizer starts it with the endpoints below.
 
 ```json
 "payment": {
@@ -364,6 +387,70 @@ All four need a token.
 - `GET /api/orders` ("my orders") uses the list envelope: `{ orders, limit, offset }`,
   newest first, every status. List items leave out `tickets`; `GET /api/orders/:id`
   has them.
+
+---
+
+## Refunds and cancellations (organizer)
+
+The organizer refunds a paid order in full (simulated) or cancels a free registration.
+No partial refunds, no attendee-initiated refunds (docs/decisions.md, decision 10).
+
+```
+GET  /api/events/:id/orders                       -> { orders, limit, offset }
+POST /api/events/:id/orders/:orderId/refund       -> { order }
+POST /api/events/:id/orders/:orderId/cancel       -> { order }
+```
+
+All three need a token and are for the event's organizer only: anyone else gets
+`403 FORBIDDEN`, and a missing event is `404 EVENT_NOT_FOUND`. An order that is not
+this event's is `404 ORDER_NOT_FOUND`, so order ids cannot be probed through an
+event's URL. They work on published and cancelled events alike: an organizer who
+called off an event refunds its paid orders afterwards.
+
+```json
+"order": {
+  "id": "uuid",
+  "status": "pending" | "paid" | "cancelled" | "refunded",
+  "buyer": { "id": "uuid", "name": "...", "email": "..." },
+  "subtotal": 1000000,
+  "discount": 0,
+  "processing_fee": 30000,
+  "total": 1030000,
+  "ticket_count": 2,
+  "checked_in_count": 0,
+  "created_at": "...",
+  "refund": { ... } | null
+}
+```
+
+`GET /api/events/:id/orders` uses the list envelope, newest first, every status, with
+the optional `status` query parameter (`pending`, `paid`, `cancelled` or `refunded`)
+to filter. `ticket_count` is all of the order's tickets; `checked_in_count` counts
+only checked-in ones. There are no `items` and no `tickets` here: the buyer's own
+order endpoint has those.
+
+- Only orders with status `paid` qualify. A `pending`, `cancelled` or `refunded`
+  order is `409 CONFLICT`.
+- The endpoints check the order's total: refund on a free registration (`total = 0`)
+  and cancel on a paid order are both `409 CONFLICT`, with a message naming the other
+  endpoint as the right action.
+- If any ticket of the order was already used at the door (`checked_in`), the whole
+  action is `409 CONFLICT` ("Some tickets of this order were already used at the
+  door") and nothing changes.
+- Refund: the order becomes `refunded`, its tickets in status `valid` or `cancelled`
+  become `refunded`, and one row is written to the `refunds` table (migration 008),
+  one per order. Cancel: the order becomes `cancelled`, its `valid` tickets become
+  `cancelled`.
+- Seats return to inventory through the ordinary availability query: an order that is
+  `refunded` or `cancelled` holds no seats. No other mechanism runs.
+- Scanning a refunded or cancelled ticket at the door answers
+  `result: "refunded"` or `"cancelled"` (see "Check-in").
+- Both actions write an audit entry (`order.refunded` with the simulated amount,
+  `order.cancelled` with the ticket count) and email the buyer: `refund_completed`
+  with the amount, the note that it is simulated and the event's `refund_policy` when
+  one is set, or `registration_cancelled` for a free registration.
+- Two simultaneous refunds of one order: exactly one succeeds, the other gets the
+  `409 CONFLICT`. The order row is locked and re-checked inside the transaction.
 
 ---
 
@@ -634,7 +721,7 @@ Use these action names and no others. A new one goes into this table and into
 
 ## Not specified yet
 
-Promo codes, seat maps, support chat, analytics, refunds. We add these when we
+Promo codes, seat maps, support chat, analytics. We add these when we
 get to them. Don't design them now.
 
 ---
