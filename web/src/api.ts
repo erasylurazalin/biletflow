@@ -606,8 +606,8 @@ export async function removeStaff(eventId: string, userId: string, token: string
   );
 }
 
-export async function verifyOrganizerIdentity(token: string): Promise<void> {
-  await apiSend('/api/me/organizer-profile/verify-identity', {
+export function verifyOrganizerIdentity(token: string): Promise<{ organizer_profile: OrganizerProfile }> {
+  return apiSend('/api/me/organizer-profile/verify-identity', {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -700,6 +700,198 @@ export async function setPromoCampaignActive(
 export async function getPromoByToken(token: string): Promise<PromoInfo> {
   const body = await apiGet<{ promo: PromoInfo }>(`/api/promo/${encodeURIComponent(token)}`);
   return body.promo;
+}
+
+// ---------------------------------------------------------------------------
+// Organizer pages (SRS 4.2, 4.3, UC1): become an organizer, my events,
+// create/edit an event, ticket types, publish and cancel.
+// ---------------------------------------------------------------------------
+
+export type OrganizerEvent = EventListItem & {
+  capacity: number;
+  tickets_sold: number;
+  checked_in: number;
+};
+
+export type MyEventsResponse = {
+  events: OrganizerEvent[];
+  limit: number;
+  offset: number;
+};
+
+type EventFields = Omit<EventDetail, 'paid_sales_active' | 'ticket_types'>;
+
+export type CreateEventInput = {
+  title: string;
+  description: string;
+  venue_name: string;
+  venue_address: string;
+  starts_at: string;
+  ends_at: string;
+  cover_image_url?: string | null;
+  refund_policy?: string | null;
+};
+
+export type TicketTypeInput = {
+  name: string;
+  price: number;
+  currency?: 'KZT';
+  quantity_total: number;
+  sales_start_at?: string | null;
+  sales_end_at?: string | null;
+  is_hidden?: boolean;
+};
+
+export type OrganizerProfileInput = {
+  display_name: string;
+  contact_email: string | null;
+  contact_phone: string | null;
+  payout: {
+    bank_name: string;
+    iban: string;
+    account_holder: string;
+  } | null;
+};
+
+export function listMyEvents(token: string, offset: number): Promise<MyEventsResponse> {
+  return apiSend<MyEventsResponse>(`/api/me/events?offset=${offset}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: 'no-store',
+  });
+}
+
+export async function getManagedEvent(token: string, id: string): Promise<EventDetail> {
+  const body = await apiSend<{ event: EventDetail }>(
+    `/api/events/${encodeURIComponent(id)}/manage`,
+    { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' },
+  );
+  return body.event;
+}
+
+export async function getOrganizerProfile(token: string): Promise<{ organizer_profile: OrganizerProfile }> {
+  const body = await apiSend<{ organizer_profile: OrganizerProfile }>(
+    '/api/me/organizer-profile',
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  return body;
+}
+
+export type OrganizerProfile = {
+  user_id: string;
+  display_name: string;
+  contact_email: string | null;
+  contact_phone: string | null;
+  payout: { bank_name: string; iban: string; account_holder: string } | null;
+  identity_verified_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export async function createOrganizerProfile(
+  token: string,
+  input: OrganizerProfileInput,
+): Promise<{ organizer_profile: OrganizerProfile; user: Omit<User, 'email_verified'>; token: string }> {
+  const body = await apiSend<{ organizer_profile: OrganizerProfile; user: Omit<User, 'email_verified'>; token: string }>(
+    '/api/me/organizer-profile',
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    },
+  );
+  return body;
+}
+
+export async function patchOrganizerProfile(
+  token: string,
+  input: Partial<OrganizerProfileInput>,
+): Promise<{ organizer_profile: OrganizerProfile }> {
+  const body = await apiSend<{ organizer_profile: OrganizerProfile }>(
+    '/api/me/organizer-profile',
+    {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    },
+  );
+  return body;
+}
+
+export async function createEvent(token: string, input: CreateEventInput): Promise<{ event: EventFields }> {
+  const body = await apiSend<{ event: EventFields }>('/api/events', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  return body;
+}
+
+export async function updateEvent(
+  token: string,
+  id: string,
+  input: Partial<CreateEventInput>,
+): Promise<{ event: EventFields }> {
+  const body = await apiSend<{ event: EventFields }>(`/api/events/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  return body;
+}
+
+export async function publishEvent(token: string, id: string): Promise<{ event: EventFields }> {
+  const body = await apiSend<{ event: EventFields }>(
+    `/api/events/${encodeURIComponent(id)}/publish`,
+    { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
+  );
+  return body;
+}
+
+export async function cancelEvent(token: string, id: string): Promise<{ event: EventFields }> {
+  const body = await apiSend<{ event: EventFields }>(
+    `/api/events/${encodeURIComponent(id)}/cancel`,
+    { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
+  );
+  return body;
+}
+
+export async function createTicketType(
+  eventId: string,
+  token: string,
+  input: TicketTypeInput,
+): Promise<{ ticket_type: TicketType }> {
+  const body = await apiSend<{ ticket_type: TicketType }>(
+    `/api/events/${encodeURIComponent(eventId)}/ticket-types`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    },
+  );
+  return body;
+}
+
+export async function updateTicketType(
+  token: string,
+  id: string,
+  input: Partial<TicketTypeInput>,
+): Promise<{ ticket_type: TicketType }> {
+  const body = await apiSend<{ ticket_type: TicketType }>(
+    `/api/ticket-types/${encodeURIComponent(id)}`,
+    {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    },
+  );
+  return body;
+}
+
+export async function deleteTicketType(token: string, id: string): Promise<void> {
+  await apiSend<void>(`/api/ticket-types/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
 }
 
 export function formatPrice(tiyn: number, locale: Locale): string {

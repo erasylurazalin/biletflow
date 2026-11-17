@@ -379,3 +379,107 @@ meRouter.get('/emails', requireAuth, async (req, res, next) => {
     next(err);
   }
 });
+
+// ---------------------------------------------------------------------------
+// GET /api/me/events  - the caller's own events, with counts
+// ---------------------------------------------------------------------------
+
+const myEventsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+interface MyEventRow {
+  id: string;
+  title: string;
+  short_description: string;
+  venue_name: string;
+  venue_address: string;
+  starts_at: Date;
+  ends_at: Date;
+  status: string;
+  cover_image_url: string | null;
+  organizer_id: string;
+  organizer_name: string;
+  capacity: number;
+  tickets_sold: number;
+  checked_in: number;
+}
+
+meRouter.get('/events', requireAuth, async (req, res, next) => {
+  try {
+    const parsed = myEventsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      const first = parsed.error.issues[0];
+      throw AppError.badRequest(
+        first
+          ? `Invalid query parameter "${first.path.join('.')}": ${first.message}`
+          : 'Invalid query',
+      );
+    }
+    const { limit, offset } = parsed.data;
+
+    const result = await pool.query<MyEventRow>(
+      `SELECT e.id,
+              e.title,
+              left(e.description, 200) AS short_description,
+              e.venue_name,
+              e.venue_address,
+              e.starts_at,
+              e.ends_at,
+              e.status,
+              e.cover_image_url,
+              u.id   AS organizer_id,
+              u.name AS organizer_name,
+              COALESCE(cap.capacity, 0)::int      AS capacity,
+              COALESCE(sold.tickets_sold, 0)::int AS tickets_sold,
+              COALESCE(ci.checked_in, 0)::int     AS checked_in
+         FROM events e
+         JOIN users u ON u.id = e.organizer_id
+         LEFT JOIN (
+              SELECT tt.event_id, sum(tt.quantity_total)::int AS capacity
+                FROM ticket_types tt
+               GROUP BY tt.event_id
+         ) cap ON cap.event_id = e.id
+         LEFT JOIN (
+              SELECT o.event_id, sum(oi.quantity)::int AS tickets_sold
+                FROM order_items oi
+                JOIN orders o ON o.id = oi.order_id
+               WHERE o.status = 'paid'
+               GROUP BY o.event_id
+         ) sold ON sold.event_id = e.id
+         LEFT JOIN (
+              SELECT t.event_id, count(*)::int AS checked_in
+                FROM tickets t
+               WHERE t.status = 'checked_in'
+               GROUP BY t.event_id
+         ) ci ON ci.event_id = e.id
+        WHERE e.organizer_id = $1
+        ORDER BY e.created_at DESC, e.id DESC
+        LIMIT $2 OFFSET $3`,
+      [req.user!.id, limit, offset],
+    );
+
+    res.json({
+      events: result.rows.map((row) => ({
+        id: row.id,
+        title: row.title,
+        description: row.short_description,
+        venue_name: row.venue_name,
+        venue_address: row.venue_address,
+        starts_at: row.starts_at,
+        ends_at: row.ends_at,
+        status: row.status,
+        cover_image_url: row.cover_image_url,
+        organizer: { id: row.organizer_id, name: row.organizer_name },
+        capacity: row.capacity,
+        tickets_sold: row.tickets_sold,
+        checked_in: row.checked_in,
+      })),
+      limit,
+      offset,
+    });
+  } catch (err) {
+    next(err);
+  }
+});

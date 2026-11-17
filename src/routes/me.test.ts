@@ -434,3 +434,84 @@ describe('GET /api/me/emails', () => {
     expect(String(query.mock.calls[0]?.[0])).toContain('LIMIT 50');
   });
 });
+
+describe('GET /api/me/events', () => {
+  const eventRow = {
+    id: '33333333-3333-4333-8333-333333333333',
+    title: 'Astana Tech Meetup',
+    short_description: 'Monthly meetup for developers.',
+    venue_name: 'Nazarbayev University',
+    venue_address: 'Kabanbay Batyr 53, Astana',
+    starts_at: new Date('2026-12-01T18:00:00.000Z'),
+    ends_at: new Date('2026-12-01T21:00:00.000Z'),
+    status: 'published',
+    cover_image_url: 'https://picsum.photos/seed/biletflow-tech/800/450',
+    organizer_id: USER_ID,
+    organizer_name: 'Aidos K.',
+    capacity: 100,
+    tickets_sold: 43,
+    checked_in: 12,
+  };
+
+  const event = {
+    id: eventRow.id,
+    title: eventRow.title,
+    description: eventRow.short_description,
+    venue_name: eventRow.venue_name,
+    venue_address: eventRow.venue_address,
+    starts_at: eventRow.starts_at.toISOString(),
+    ends_at: eventRow.ends_at.toISOString(),
+    status: eventRow.status,
+    cover_image_url: eventRow.cover_image_url,
+    organizer: { id: eventRow.organizer_id, name: eventRow.organizer_name },
+    capacity: eventRow.capacity,
+    tickets_sold: eventRow.tickets_sold,
+    checked_in: eventRow.checked_in,
+  };
+
+  it('returns my own events with counts, newest first', async () => {
+    query.mockResolvedValueOnce(rows([eventRow]));
+
+    const res = await request(app).get('/api/me/events').set('Authorization', bearer('organizer'));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      events: [event],
+      limit: 20,
+      offset: 0,
+    });
+    expect(String(query.mock.calls[0]?.[0])).toContain('WHERE e.organizer_id = $1');
+    expect(String(query.mock.calls[0]?.[0])).toContain('ORDER BY e.created_at DESC');
+    expect(query.mock.calls[0]?.[1]).toEqual([USER_ID, 20, 0]);
+    expect(query.mock.calls[0]?.[0]).toContain('capacity');
+    expect(query.mock.calls[0]?.[0]).toContain('tickets_sold');
+    expect(query.mock.calls[0]?.[0]).toContain('checked_in');
+  });
+
+  it('echoes the requested paging', async () => {
+    query.mockResolvedValueOnce(rows([]));
+
+    const res = await request(app)
+      .get('/api/me/events?limit=5&offset=10')
+      .set('Authorization', bearer('organizer'));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ events: [], limit: 5, offset: 10 });
+    expect(query.mock.calls[0]?.[1]).toEqual([USER_ID, 5, 10]);
+  });
+
+  it('returns an empty list when I have no events', async () => {
+    query.mockResolvedValueOnce(rows([]));
+
+    const res = await request(app).get('/api/me/events').set('Authorization', bearer());
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ events: [], limit: 20, offset: 0 });
+  });
+
+  it('returns 401 without a token', async () => {
+    const res = await request(app).get('/api/me/events');
+    expect(res.status).toBe(401);
+    expect(query).not.toHaveBeenCalled();
+  });
+});
