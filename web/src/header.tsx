@@ -70,6 +70,20 @@ export function Header() {
                 {t.header.myOrders}
               </Link>
               <span className="font-medium">{user.name}</span>
+              {user.role === 'organizer' ? (
+                <>
+                  <Link href="/organizer/events" className="text-zinc-600 hover:text-zinc-900">
+                    {t.header.myEvents}
+                  </Link>
+                  <Link href="/organizer/profile" className="text-zinc-600 hover:text-zinc-900">
+                    {t.header.organizerProfile}
+                  </Link>
+                </>
+              ) : (
+                <Link href="/organizer/profile" className="text-zinc-600 hover:text-zinc-900">
+                  {t.header.becomeOrganizer}
+                </Link>
+              )}
               <button type="button" onClick={logout} className="text-zinc-600 hover:text-zinc-900">
                 {t.header.logOut}
               </button>
