@@ -164,17 +164,58 @@ All four need a token, and all four work on the caller's own profile only.
 
 ---
 
+## My events (organizer)
+
+```
+GET /api/me/events                 -> { events, limit, offset }
+```
+
+The caller's own events in every status (draft, published, cancelled), newest first.
+Needs a token; a user who is not an organizer gets an empty list. `limit` defaults to
+20 and caps at 100, `offset` defaults to 0, as on every list endpoint.
+
+Each item is the list shape from `GET /api/events` plus three counts computed from the
+database, never stored:
+
+- `capacity`: the sum of the event's ticket type `quantity_total`.
+- `tickets_sold`: seats on `paid` orders. Refunded orders are not counted, matching the
+  "sold" figure in analytics.
+- `checked_in`: tickets whose status is `checked_in`.
+
+```json
+"event": {
+  "id": "uuid",
+  "title": "Astana Tech Meetup",
+  "description": "…",              // shortened to 200 characters, as in the list
+  "venue_name": "Nazarbayev University",
+  "venue_address": "Kabanbay Batyr 53, Astana",
+  "starts_at": "2026-11-14T18:00:00Z",
+  "ends_at": "2026-11-14T21:00:00Z",
+  "status": "draft" | "published" | "cancelled",
+  "cover_image_url": "https://..." | null,
+  "organizer": { "id": "uuid", "name": "..." },
+  "capacity": 100,
+  "tickets_sold": 43,
+  "checked_in": 12
+}
+```
+
+---
+
 ## Events
 
 ```
 GET    /api/events                    public list (published, not suspended)
 GET    /api/events/:id                public detail (404 once suspended)
+GET    /api/events/:id/manage         organizer detail (any status, includes hidden ticket types)
 POST   /api/events                    organizer creates (role organizer: has a profile)
 PATCH  /api/events/:id                organizer edits
 POST   /api/events/:id/publish        draft -> published
 POST   /api/events/:id/cancel         draft or published -> cancelled
 ```
 
+- The manage endpoint requires a token and returns the same event shape as public
+  detail. Missing events and events owned by someone else return `404 EVENT_NOT_FOUND`.
 - Only the event's organizer can publish or cancel it. Unknown events return
   `404 EVENT_NOT_FOUND`; other organizers get `403`.
 - Publishing requires at least one ticket type and a future start time. Published and
