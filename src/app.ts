@@ -9,6 +9,8 @@
  * last, because Express runs middleware in the order it was mounted.
  */
 import express from 'express';
+import { adminRouter } from './routes/admin';
+import { analyticsRouter } from './routes/analytics';
 import { authRouter } from './routes/auth';
 import { checkInRouter } from './routes/check-in';
 import { devRouter } from './routes/dev';
@@ -17,6 +19,7 @@ import { meRouter } from './routes/me';
 import { organizerOrdersRouter } from './routes/organizer-orders';
 import { ordersRouter } from './routes/orders';
 import { paidSalesRouter } from './routes/paid-sales';
+import { promoCampaignsRouter } from './routes/promo-campaigns';
 import { staffRouter } from './routes/staff';
 import { ticketTypesRouter } from './routes/ticket-types';
 import { ticketsRouter } from './routes/tickets';
@@ -42,6 +45,9 @@ export function createApp() {
   app.use('/api', checkInRouter);
   app.use('/api', paidSalesRouter);
   app.use('/api', organizerOrdersRouter);
+  app.use('/api', promoCampaignsRouter);
+  app.use('/api', analyticsRouter);
+  app.use('/api', adminRouter);
   app.use('/api', devRouter);
 
   app.use(notFoundHandler);

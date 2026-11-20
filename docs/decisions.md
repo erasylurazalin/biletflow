@@ -273,3 +273,138 @@ about what a policy must contain, so it is left as free text.
 **Where.** `migrations/008_refunds.sql`, `src/routes/organizer-orders.ts`,
 `src/lib/refunds.ts`, the "Refunds and cancellations (organizer)" section of
 `docs/api.md`.
+
+---
+
+## 11. Promo codes: one per order, the limit counted like seats, and fees not discounted
+
+**Decision.** A promotional campaign belongs to one event and carries a percent or
+fixed-KZT discount, an optional validity window, an optional redemption limit and an
+optional list of covered ticket types. Each campaign has a promo code, typed by the
+buyer, and a campaign link with an opaque token, whose QR code is generated on the
+server and opens no door: check-in refuses anything that is not a signed ticket
+payload.
+
+An order carries at most one promo code. A redemption counts while its order is
+`paid`, or `pending` and not expired: the same rule as held seats. An abandoned
+checkout therefore frees its redemption by itself, and a refund or cancellation frees
+it too, without anyone sweeping rows. The limit is enforced under a lock on the
+campaign row inside the order transaction, so it holds when many people check out at
+once.
+
+The discount covers only the items whose ticket type the campaign covers. A percent
+discount is rounded to the tiyn; a fixed discount is capped at the covered subtotal
+and applies once per order. The 3% processing charge is computed from the price after
+the discount and is never discounted itself. In the campaign report, `orders`,
+`tickets sold` and revenue count paid orders only; processing fees are not revenue
+for the organizer and are left out.
+
+**SRS basis.**
+
+- 4.14: promotional campaigns with percentage or fixed-KZT discounts, validity dates,
+  maximum redemptions and applicable ticket types, plus campaign QR codes that are
+  not admission tickets.
+- UC10: the buyer enters a promo code at checkout; the system validates it and applies
+  the discount.
+- 11, success criteria 7 and 8: a campaign link shows the discount applied, and the
+  scanner can tell a campaign QR code from an admission ticket.
+- 4.6: the system calculates totals and processing charges.
+
+**Rejected.** Stacking several codes on one order: the SRS speaks of "a promo code",
+and one-per-order keeps the discount explainable at checkout. Counting abandoned
+orders against the limit: a checkout that was never paid is not a redemption, and
+seats it held are released too. Discounting the processing charge: the charge exists
+to cover the platform's cost (decision 5), so it is taken on the discounted price,
+which is also what keeps a 100% campaign free instead of paying the buyer's fee for
+them.
+
+**Where.** `migrations/009_promo_codes.sql`, `src/routes/promo-campaigns.ts`,
+`src/routes/orders.ts`, the "Promo codes and campaign QR codes (organizer)" and
+"Orders" sections of `docs/api.md`.
+
+---
+
+## 12. Analytics are computed on read, and revenue means the money the organizer keeps
+
+**Decision.** The analytics endpoint computes every number from orders, order items,
+tickets, refunds, redemptions and check-ins on each request and stores none of them.
+Capacity is the sum of the ticket types' `quantity_total`, hidden types included.
+Sold counts the tickets of paid orders only, so a refund, a cancellation or an
+abandoned checkout takes its tickets back out; seats still held by pending orders are
+reported next to it and are not sales. Gross is the sum of the subtotals of every
+order that reached paid, refunded ones included, discounts are theirs, refunds are
+the discounted subtotal of the refunded ones, and net is gross minus discounts minus
+refunds. The 3% processing charge is never organizer revenue, so it sits outside all
+four figures, which also means a refund lowers net by less than the buyer is
+refunded. Attendance counts tickets in status `valid` or `checked_in`: absent is
+`valid`, and refunded and cancelled tickets are neither. Date filters and day buckets
+use Kazakhstan time (`Asia/Almaty`, UTC+5, no daylight saving). The campaign block
+repeats the campaign report numbers unchanged, so the date range does not narrow it.
+
+**SRS basis.**
+
+- 4.15: capacity, sold, remaining and percentage sold; gross sales, discounts,
+  refunds and net demonstration revenue in KZT; sales over time from order
+  timestamps; comparison by ticket type; campaign redemptions, attributed tickets and
+  revenue; checked-in attendees, absent holders and the check-in percentage; filters
+  by event, date range and ticket type; and all of it calculated from BiletFlow
+  records.
+- UC11: the organizer opens the dashboard, selects a date range or a ticket type, and
+  reviews sales, revenue, campaign performance and attendance.
+- Section 11, criterion 10: basic sales, capacity, campaign and attendance analytics
+  without adding fields to the attendee checkout.
+- 3.2 and 4.6: money is simulated, so this is demonstration revenue and is labelled
+  like every other simulated amount.
+- Decisions 5 and 11: the processing charge covers the platform's cost and is not
+  organizer revenue; the campaign report already leaves it out.
+
+**Rejected.** Stored counters or a nightly rollup: a counter drifts the first time a
+refund, a cancellation or an undone check-in arrives, and these volumes never need
+one. Leaving refunded orders out of gross instead of subtracting them: the organizer
+needs to see both what sold and what came back. Splitting an order's discount across
+its ticket types: the discount is recorded per order, and an invented split would
+produce per-type numbers nobody could reconcile with the order. Counting pending
+orders as sold: an unpaid checkout is not a sale. Filling days without sales with
+zeros: an empty day is visible by its missing date, and zeros would make a long quiet
+period look like activity. Using UTC for day buckets and plain date filters: the
+events and the team are in Kazakhstan, and a sale at 02:00 local would otherwise be
+counted on the previous day.
+
+**Where.** `src/routes/analytics.ts`, `src/lib/campaigns.ts`,
+`web/src/app/organizer/events/[id]/analytics/page.tsx`, the "Analytics (organizer)"
+section of `docs/api.md`.
+
+---
+
+## 13. The printable ticket is a PDF rendered from the ticket record, never a stored file
+
+**Decision.** `GET /api/tickets/:id/pdf` renders a one-page A4 PDF from the canonical
+ticket record on every request and stores no file: the event title, date and time in
+Kazakhstan time, venue name and address, ticket type, attendee name, ticket code, the
+ticket's status, and the QR code of its `qr_payload`. Every status prints. The payload
+is the same one the app shows, so a printed copy is the same admission and the scanner,
+not the paper, decides validity. The page carries no price, no payment data, no email
+and no seat, because BiletFlow assigns no seats. The QR is black on white, at least
+60 mm square, with a quiet zone and error correction level Q, so a grayscale print on
+A4 decodes. The code sits a fixed distance above the footer with the text filling the
+space above it, so text that cannot fit is shortened with a trailing ellipsis, while the
+ticket code, the status and the QR code are never shortened. Text uses an embedded
+DejaVu Sans, because standard PDF fonts cannot encode Kazakh and Russian names.
+
+**SRS basis.** 4.11 and UC7 (the contents list, no payment-card details, one identifier
+for digital and printed copies); section 8 (legible text and scannable QR on A4, in
+colour or grayscale, and the server-generated PDF from the canonical record); section
+11, criterion 4.
+
+**Rejected.** Storing or caching generated files: the record is canonical and a stale
+file would print a status that is no longer true. Printing only valid tickets: an
+attendee who prints before a refund keeps paper that looks usable, and a status on the
+page is more honest than a missing document. Dropping the QR from cancelled and
+refunded tickets: the scanner has to answer "cancelled" or "refunded" for printed paper,
+which needs the payload. Rendering in the browser: print CSS differs per browser and the
+SRS asks for a server-side PDF. Standard PDF fonts with transliteration: mangling a
+Kazakh name on an admission document is worse than shipping a font.
+
+**Where.** `src/lib/ticket-pdf.ts`, `src/routes/tickets.ts`, `assets/fonts/`,
+`web/src/api.ts`, `web/src/app/tickets/page.tsx`, the "Printable ticket (PDF)" part of
+`docs/api.md`.

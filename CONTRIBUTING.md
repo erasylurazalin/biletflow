@@ -29,7 +29,7 @@ nvm install    # or: fnm install
 nvm use        # or: fnm use
 ```
 
-If you already run Postgres locally, you can skip `docker compose up -d` and point
+If you already run Postgres locally, you can skip `docker compose up -d db` and point
 `DATABASE_URL` at your own server.
 
 ## Dependencies and the lockfile

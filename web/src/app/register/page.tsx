@@ -1,10 +1,12 @@
 import type { Metadata } from 'next';
 import { Suspense } from 'react';
 import { AuthForm } from '@/auth-form';
+import { getI18n } from '@/i18n/server';
 
-export const metadata: Metadata = {
-  title: 'Register · BiletFlow',
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const { t } = await getI18n();
+  return { title: t.meta.register };
+}
 
 export default function RegisterPage() {
   return (

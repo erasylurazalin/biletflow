@@ -144,3 +144,6 @@ vite.config.ts.timestamp-*
 
 # Personal notes for this checkout. Not part of the project.
 .local/
+
+# Database dumps from scripts/backup.sh. They hold password hashes and emails.
+backups/

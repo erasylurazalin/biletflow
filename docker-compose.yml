@@ -1,5 +1,9 @@
-# Postgres only. The Node app runs on the host with `npm run dev`, so you can
-# restart it fast and keep your debugger attached.
+# `docker compose up` runs the whole demo: Postgres, the API (which migrates and seeds
+# on start) and the web app on http://localhost:3001.
+#
+# For development, start only the database with `docker compose up -d db` and run the
+# API on the host with `npm run dev`, so you can restart it fast and keep your debugger
+# attached. The api and web services would take ports 3000 and 3001 from you.
 services:
   db:
     image: postgres:16
@@ -22,6 +26,53 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  api:
+    build: .
+    container_name: biletflow-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://biletflow:biletflow@db:5432/biletflow
+      # Demo value, same as .env.example, so the QR payloads the seed prints scan
+      # against either setup. Public, so never use this stack for anything real.
+      JWT_SECRET: dev-secret-change-me
+      PORT: 3000
+      WEB_URL: http://localhost:3001
+      # NODE_ENV is left unset on purpose: production mode hides the demo outbox
+      # (GET /api/dev/outbox), which the password reset demo needs.
+    ports:
+      - '127.0.0.1:3000:3000'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      # Migrations and the seed run before the server listens.
+      start_period: 30s
+
+  web:
+    build:
+      context: ./web
+      args:
+        API_URL: http://api:3000
+    container_name: biletflow-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_URL: http://api:3000
+    ports:
+      - '127.0.0.1:3001:3001'
 
 volumes:
   biletflow-pgdata:

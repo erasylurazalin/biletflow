@@ -22,7 +22,7 @@
  * Everything the route returns must match docs/api.md. If you need a different shape,
  * change the doc first and tell the group chat.
  */
-import { Router } from 'express';
+import { Router, type RequestHandler } from 'express';
 import { z } from 'zod';
 import { pool } from '../db/pool';
 import { withTransaction } from '../db/transaction';
@@ -92,8 +92,10 @@ eventsRouter.get('/', async (req, res, next) => {
               u.name AS organizer_name
          FROM events e
          JOIN users u ON u.id = e.organizer_id
-        -- Public endpoint: drafts and cancelled events are nobody else's business.
+        -- Public endpoint: drafts and cancelled events are nobody else's business, and
+        -- neither are events a platform admin has suspended (migration 010).
         WHERE e.status = 'published'
+          AND e.suspended_at IS NULL
           -- $3 is NULL when no search was given, and then this condition is TRUE for
           -- every row. One query instead of two, without concatenating SQL.
           AND ($3::text IS NULL OR e.title ILIKE '%' || $3 || '%')
@@ -153,16 +155,17 @@ interface TicketTypeRow {
   is_hidden: boolean;
 }
 
-eventsRouter.get('/:id', async (req, res, next) => {
-  try {
-    const parsed = idParamSchema.safeParse(req.params);
-    if (!parsed.success) {
-      throw AppError.badRequest('Event id must be a UUID');
-    }
-    const { id } = parsed.data;
+function readEvent(owned: boolean): RequestHandler {
+  return async (req, res, next) => {
+    try {
+      const parsed = idParamSchema.safeParse(req.params);
+      if (!parsed.success) {
+        throw AppError.badRequest('Event id must be a UUID');
+      }
+      const { id } = parsed.data;
 
-    const eventResult = await pool.query<EventDetailRow>(
-      `SELECT e.id,
+      const eventResult = await pool.query<EventDetailRow>(
+        `SELECT e.id,
               e.title,
               e.description,
               e.venue_name,
@@ -182,19 +185,18 @@ eventsRouter.get('/:id', async (req, res, next) => {
          FROM events e
          JOIN users u ON u.id = e.organizer_id
         WHERE e.id = $1
-          AND e.status = 'published'`,
-      [id],
-    );
+          AND ${owned ? 'e.organizer_id = $2' : "e.status = 'published' AND e.suspended_at IS NULL"}`,
+        owned ? [id, req.user!.id] : [id],
+      );
 
-    const event = eventResult.rows[0];
-    if (!event) {
-      // Unpublished events answer 404 as well, on purpose: "this id exists but you may
-      // not see it" tells a stranger more than they need to know.
-      throw AppError.notFound(ErrorCode.EVENT_NOT_FOUND, 'Event not found');
-    }
+      const event = eventResult.rows[0];
+      if (!event) {
+        // A missing event and an event outside the caller's visibility both return 404.
+        throw AppError.notFound(ErrorCode.EVENT_NOT_FOUND, 'Event not found');
+      }
 
-    const ticketTypesResult = await pool.query<TicketTypeRow>(
-      `SELECT tt.id,
+      const ticketTypesResult = await pool.query<TicketTypeRow>(
+        `SELECT tt.id,
               tt.name,
               tt.price,
               tt.currency,
@@ -218,32 +220,27 @@ eventsRouter.get('/:id', async (req, res, next) => {
                GROUP BY oi.ticket_type_id
          ) held ON held.ticket_type_id = tt.id
         WHERE tt.event_id = $1
-          AND tt.is_hidden = false
+          ${owned ? '' : 'AND tt.is_hidden = false'}
         ORDER BY tt.price ASC, tt.name ASC`,
-      [id],
-    );
+        [id],
+      );
 
-    res.json({
-      event: {
-        id: event.id,
-        title: event.title,
-        description: event.description,
-        venue_name: event.venue_name,
-        venue_address: event.venue_address,
-        starts_at: event.starts_at,
-        ends_at: event.ends_at,
-        status: event.status,
-        cover_image_url: event.cover_image_url,
-        refund_policy: event.refund_policy,
-        organizer: { id: event.organizer_id, name: event.organizer_name },
-        paid_sales_active: event.paid_sales_active,
-        ticket_types: ticketTypesResult.rows,
-      },
-    });
-  } catch (err) {
-    next(err);
-  }
-});
+      res.json({
+        event: {
+          ...toOwnedEvent(event, event.organizer_name),
+          paid_sales_active: event.paid_sales_active,
+          ticket_types: ticketTypesResult.rows,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
+eventsRouter.get('/:id', readEvent(false));
+eventsRouter.get('/:id/manage', requireAuth, readEvent(true));
+
 // ---------------------------------------------------------------------------
 // POST /api/events  - organizer creates a new draft event
 // ---------------------------------------------------------------------------

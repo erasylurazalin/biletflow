@@ -11,7 +11,7 @@ Start the API first, from the repository root:
 ```
 npm ci
 cp .env.example .env
-docker compose up -d
+docker compose up -d db
 npm run migrate
 npm run seed
 npm run dev          # API on http://localhost:3000

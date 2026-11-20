@@ -164,17 +164,58 @@ All four need a token, and all four work on the caller's own profile only.
 
 ---
 
+## My events (organizer)
+
+```
+GET /api/me/events                 -> { events, limit, offset }
+```
+
+The caller's own events in every status (draft, published, cancelled), newest first.
+Needs a token; a user who is not an organizer gets an empty list. `limit` defaults to
+20 and caps at 100, `offset` defaults to 0, as on every list endpoint.
+
+Each item is the list shape from `GET /api/events` plus three counts computed from the
+database, never stored:
+
+- `capacity`: the sum of the event's ticket type `quantity_total`.
+- `tickets_sold`: seats on `paid` orders. Refunded orders are not counted, matching the
+  "sold" figure in analytics.
+- `checked_in`: tickets whose status is `checked_in`.
+
+```json
+"event": {
+  "id": "uuid",
+  "title": "Astana Tech Meetup",
+  "description": "…",              // shortened to 200 characters, as in the list
+  "venue_name": "Nazarbayev University",
+  "venue_address": "Kabanbay Batyr 53, Astana",
+  "starts_at": "2026-11-14T18:00:00Z",
+  "ends_at": "2026-11-14T21:00:00Z",
+  "status": "draft" | "published" | "cancelled",
+  "cover_image_url": "https://..." | null,
+  "organizer": { "id": "uuid", "name": "..." },
+  "capacity": 100,
+  "tickets_sold": 43,
+  "checked_in": 12
+}
+```
+
+---
+
 ## Events
 
 ```
-GET    /api/events                    public list (published only)
-GET    /api/events/:id                public detail
+GET    /api/events                    public list (published, not suspended)
+GET    /api/events/:id                public detail (404 once suspended)
+GET    /api/events/:id/manage         organizer detail (any status, includes hidden ticket types)
 POST   /api/events                    organizer creates (role organizer: has a profile)
 PATCH  /api/events/:id                organizer edits
 POST   /api/events/:id/publish        draft -> published
 POST   /api/events/:id/cancel         draft or published -> cancelled
 ```
 
+- The manage endpoint requires a token and returns the same event shape as public
+  detail. Missing events and events owned by someone else return `404 EVENT_NOT_FOUND`.
 - Only the event's organizer can publish or cancel it. Unknown events return
   `404 EVENT_NOT_FOUND`; other organizers get `403`.
 - Publishing requires at least one ticket type and a future start time. Published and
@@ -260,6 +301,45 @@ DELETE /api/ticket-types/:id
 
 ---
 
+## Admin: suspending an event
+
+```
+POST /api/admin/events/:id/suspend      -> { event }
+POST /api/admin/events/:id/unsuspend    -> { event }
+```
+
+For `platform_admin` only (SRS 4.12). Everybody else logged in gets `403 FORBIDDEN`, and
+no token is `401`. Unknown events return `404 EVENT_NOT_FOUND`. Suspending an event that
+is already suspended, or lifting a suspension that is not there, is `409 CONFLICT`.
+
+A suspended event:
+
+- disappears from `GET /api/events`, and `GET /api/events/:id` answers `404 EVENT_NOT_FOUND`;
+- takes no new orders: `POST /api/orders` answers `409 CONFLICT`
+  ("This event is not accepting orders");
+- keeps everything that already exists. Orders and tickets are not cancelled, refunded or
+  hidden from their owners, and an order placed before the suspension can still be paid.
+
+Suspension sits on top of the organizer's `status` and never changes it, so lifting it
+puts the event back exactly as it was. Suspending and lifting each write an audit entry
+(`event.suspended`, `event.unsuspended`).
+
+```json
+"event": {
+  "id": "uuid",
+  "title": "Astana Tech Meetup",
+  "status": "published",
+  "suspended": true,
+  "suspended_at": "2026-10-25T12:00:00Z"
+}
+```
+
+`suspended_at` is `null` when `suspended` is `false`. This is only the admin's answer:
+the full event object does not carry the flag yet. Searching events, suspending users,
+reported events, platform settings and the admin pages are #63.
+
+---
+
 ## Orders (the important one)
 
 Two steps: create the order, then pay for it. Do not merge these.
@@ -268,7 +348,7 @@ Buying needs a logged-in user of any role, not the `attendee` role: organizers a
 door staff go to other people's events too.
 
 ```
-POST /api/orders          { event_id, items: [{ ticket_type_id, quantity, attendee_names? }] }
+POST /api/orders          { event_id, items: [{ ticket_type_id, quantity, attendee_names? }], promo_code? }
                           -> { order }   // status: "pending"
 
 POST /api/orders/:id/pay  { simulate_failure? } // simulated payment
@@ -290,6 +370,7 @@ GET  /api/orders/:id
   "discount": 0,
   "processing_fee": 30000,
   "total": 1030000,
+  "promo": { "code": "SPRING25", "campaign_name": "Spring deal" } | null,
   "created_at": "...",
   "expires_at": "...",     // pending orders die after 15 min; null once paid
   "payment": { ... } | null, // null until paid, and for free orders
@@ -345,17 +426,25 @@ All four need a token.
   `quantity`. Each name is trimmed and must be 1 to 100 characters. A missing list is
   allowed; a list of the wrong length is `400 VALIDATION_ERROR`.
 - The event must be published. A draft or a missing event is `404 EVENT_NOT_FOUND`,
-  the same as the public detail. A cancelled event is `409 CONFLICT`.
+  the same as the public detail. A cancelled event is `409 CONFLICT`, and so is an event
+  a platform admin has suspended (see "Admin: suspending an event").
 - Every ticket type must belong to that event and must not be hidden, otherwise
-  `400 VALIDATION_ERROR`. Hidden types become buyable with promo codes, which are not
-  specified yet.
+  `400 VALIDATION_ERROR`. A hidden type is orderable only with a promo code whose
+  campaign lists that type explicitly in `ticket_type_ids` (see "Promo codes and
+  campaign QR codes"); without such a code it stays `400 VALIDATION_ERROR`.
+- `promo_code` is optional. When given, it is matched case-insensitively and validated
+  inside the same transaction that creates the order. Every refusal is
+  `409 PROMO_CODE_INVALID` (see "Promo codes and campaign QR codes").
 - Outside a ticket type's `sales_start_at` and `sales_end_at` the order is
   `409 SALES_CLOSED`. Not enough left is `409 TICKET_SOLD_OUT`.
 - `name` and `unit_price` are copied from the ticket type into the order, so a later
-  price change does not touch it. `subtotal` is the sum of the items, `discount` is
-  `0` until promo codes exist, and `processing_fee` is 3% of `subtotal - discount`,
-  rounded to the nearest tiyn. `total` is `subtotal - discount + processing_fee`, so
-  the fee and total are both `0` for a free order. The simulated payment uses `total`.
+  price change does not touch it. `subtotal` is the sum of the items. `discount` is
+  `0` without a promo code, and the promo discount when a valid one is given (see
+  "Promo codes and campaign QR codes"). `processing_fee` is 3% of
+  `subtotal - discount`, rounded to the nearest tiyn. `total` is
+  `subtotal - discount + processing_fee`, so the fee and total are both `0` for a free
+  order, including an order whose promo discount covers its whole subtotal. The
+  simulated payment uses `total`.
 - `expires_at` is 15 minutes after `created_at` (the SRS gives no time; this is our
   default, `docs/decisions.md`). A pending order past that time holds no inventory and
   reads as `cancelled`.
@@ -451,6 +540,131 @@ order endpoint has those.
   one is set, or `registration_cancelled` for a free registration.
 - Two simultaneous refunds of one order: exactly one succeeds, the other gets the
   `409 CONFLICT`. The order row is locked and re-checked inside the transaction.
+
+---
+
+## Promo codes and campaign QR codes (organizer)
+
+A promotional campaign belongs to one event and gives a discount on the ticket types
+it covers (SRS 4.14, UC10). Each campaign carries a promo `code` the buyer types at
+checkout and an opaque `token` that goes into the campaign link. The QR code is a
+picture of exactly that link, in dark blue on white so it never looks like the black
+admission tickets on the same phone, and it is not a ticket: the check-in endpoint
+answers `invalid` for it (see "Check-in").
+
+```
+POST /api/events/:id/promo-campaigns        { campaign } fields below -> 201 { campaign }
+GET  /api/events/:id/promo-campaigns        -> { campaigns, ticket_types, limit, offset }
+PATCH /api/promo-campaigns/:id              { is_active }             -> { campaign }
+GET  /api/promo-campaigns/:id/qr.png        -> image/png (organizer only)
+GET  /api/promo/:token                      -> { promo } (public)
+```
+
+The first three need a token and are for the event's organizer only: anyone else gets
+`403 FORBIDDEN`, and a missing event is `404 EVENT_NOT_FOUND`. A campaign id that
+does not exist is `404 PROMO_CAMPAIGN_NOT_FOUND`. The public `GET /api/promo/:token`
+answers the same `404 PROMO_CAMPAIGN_NOT_FOUND` when the token is unknown or the
+campaign is not currently usable (inactive, before `starts_at`, after `ends_at`).
+
+```json
+"campaign": {
+  "id": "uuid",
+  "event_id": "uuid",
+  "name": "Spring deal",
+  "code": "SPRING25",
+  "token": "base64url, 32 characters",
+  "discount_type": "percent" | "fixed",
+  "discount_value": 20,
+  "starts_at": "..." | null,
+  "ends_at": "..." | null,
+  "max_redemptions": 100,        // or null: unlimited
+  "ticket_type_ids": ["uuid"] | null,  // null: every ticket type of the event
+  "is_active": true,
+  "created_at": "...",
+  "link": "https://<web>/events/<event id>?promo=<token>",
+  "redemptions": 0,
+  "orders": 0,
+  "tickets_sold": 0,
+  "gross_revenue": 0,
+  "discount_total": 0,
+  "net_revenue": 0
+}
+```
+
+- Creating takes `name` (1 to 100 characters), `discount_type` with `discount_value`
+  (`percent` is 1 to 100, `fixed` is an amount in tiyn above 0), and optionally `code`
+  (6 to 20 characters of A-Z and 0-9, any case; stored upper-case and unique across
+  the platform; left out, the server generates 8 random characters), `starts_at`,
+  `ends_at` (`ends_at` must be after `starts_at` when both are set), `max_redemptions`
+  and `ticket_type_ids` (every id must belong to the event, hidden types included).
+  Creating writes a `promo_code.created` audit entry.
+- `PATCH` takes `{ "is_active": false }` (or `true`). Turning a campaign off writes a
+  `promo_code.disabled` audit entry; turning it back on writes none.
+- The campaign link never contains the discount or any price: only the event id and
+  the opaque token. `GET /api/promo-campaigns/:id/qr.png` is a PNG of that link,
+  generated on the server.
+- The report numbers are computed from the database on every read, never stored.
+  `redemptions` counts live redemptions: an order that is `paid`, or `pending` and not
+  expired, the same rule as seat availability. Abandoned orders free their redemption,
+  and so do refunds and cancellations. `orders`, `tickets_sold` and `gross_revenue`
+  (the sum of `subtotal`) count paid orders only; `discount_total` is the sum of the
+  discounts of paid orders and `net_revenue` is `gross_revenue - discount_total`.
+  Processing fees are not revenue for the organizer and are left out.
+- `GET /api/events/:id/promo-campaigns` uses the list envelope, newest first. Its
+  response also carries the event's `ticket_types` (hidden ones included, with
+  `id`, `name`, `price`, `is_hidden`), because the create form offers them and the
+  public event detail leaves hidden types out.
+
+```json
+"promo": {
+  "code": "SPRING25",
+  "event_id": "uuid",
+  "campaign_name": "Spring deal",
+  "discount_type": "percent",
+  "discount_value": 20,
+  "ticket_type_ids": ["uuid"] | null,
+  "starts_at": "..." | null,
+  "ends_at": "..." | null,
+  "ticket_types": [
+    { "id": "uuid", "name": "Early Bird", "price": 500000, "quantity_available": 43 }
+  ]
+}
+```
+
+The web event page calls `GET /api/promo/:token` when it is opened with
+`?promo=<token>`, pre-fills the promo field with the code and shows which types are
+covered, hidden ones included: `ticket_types` lists the covered types with name, price
+and availability so they can be ordered like any other type once the code is applied.
+
+### Redeeming a code
+
+`POST /api/orders` takes an optional `promo_code`, matched case-insensitively. It is
+validated and applied in the same transaction that creates the order, under a lock on
+the campaign row, so the redemption limit holds when many buyers check out at once.
+Exactly one code per order.
+
+The discount covers only the items whose ticket type the campaign covers (the
+"applicable subtotal"). `percent` is `round(applicable * percent / 100)`; `fixed` is
+`min(value, applicable)`, once per order. Then `processing_fee` is 3% of
+`subtotal - discount` and `total = subtotal - discount + processing_fee`, as always:
+the processing charge is never discounted. A `total` of 0 is allowed and behaves like
+a free order at payment. Paid ticket types still need the event's paid sales to be
+active, with or without a code.
+
+Every refusal is `409 PROMO_CODE_INVALID`, with `message` shown to the buyer:
+
+| Situation                                   | Message                                                  |
+| ------------------------------------------- | -------------------------------------------------------- |
+| Unknown code, or a code of another event    | `This promo code is not valid`                           |
+| The campaign is not active                  | `This promo code is no longer active`                    |
+| Before `starts_at`                          | `This promo code is not active yet`                      |
+| After `ends_at`                             | `This promo code has expired`                            |
+| The redemption limit is reached             | `This promo code has been fully used`                    |
+| None of the ordered ticket types is covered | `This promo code does not apply to the selected tickets` |
+
+The order records its campaign, and one row per order is written to
+`promo_redemptions` with the discount amount. `order.promo` carries
+`{ code, campaign_name }` of that campaign, or `null`.
 
 ---
 
@@ -550,6 +764,29 @@ BF1:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:3aCMMhEA4oqbvzq1cElUe_EbD_aItVWk7NSjPnZ
 it whenever it returns a ticket, so changing the secret invalidates every old QR code.
 
 The app sends the whole string back to the server. It does not parse or trust it.
+
+### Printable ticket (PDF)
+
+`GET /api/tickets/:id/pdf` answers `application/pdf`: a one-page A4 ticket the attendee
+prints from any viewer (SRS 4.11, UC7, criterion 4). It needs a token and is for the
+ticket's owner only: anybody else's ticket is `404 TICKET_NOT_FOUND`, the same as
+`GET /api/tickets/:id`. A plain bad id is `400 VALIDATION_ERROR`.
+
+The response carries `Content-Disposition: attachment; filename="biletflow-<code>.pdf"`.
+
+Every status prints, `cancelled` and `refunded` included: the status is on the page and
+the QR code is the ticket's own `qr_payload`, so a printed copy and the phone are one
+admission and the door scanner decides what is valid, exactly as it does for the app.
+
+The page carries the event title, its date and time in Kazakhstan time, the venue name
+and address, the ticket type, the attendee name, the ticket code, the ticket's status,
+and the QR code, and nothing else. It carries no price, no payment data, no currency and
+no email address (SRS 4.11).
+
+The QR code is black on white with a quiet zone, at least 60 mm square, at error
+correction level Q, so a grayscale print on ordinary A4 still decodes. The PDF is
+generated from the ticket record on every request, by `src/lib/ticket-pdf.ts`, with an
+embedded DejaVu font so Kazakh and Russian event and attendee names print correctly.
 
 ---
 
@@ -672,6 +909,128 @@ All validation is server-side. The phone decides nothing.
 
 ---
 
+## Analytics (organizer)
+
+The event dashboard (SRS 4.15, UC11, success criterion 10), read from orders, order
+items, tickets, refunds, redemptions and check-ins on every request. Nothing is
+stored: a stored counter would drift the first time a refund or an undone check-in
+happened.
+
+```
+GET /api/events/:id/analytics?from=&to=&ticket_type_id=
+    -> { event, filters, sales, revenue, by_ticket_type, check_in, over_time, campaigns }
+```
+
+Needs a token and is for the event's organizer only: anyone else gets `403 FORBIDDEN`,
+and a missing event is `404 EVENT_NOT_FOUND`. Draft, published and cancelled events
+all answer: an organizer looks at the numbers before the event and after calling it
+off. A filter narrows every block except `campaigns`, which is described below.
+
+Every query parameter is optional:
+
+- `from` and `to` are ISO 8601 date-times with an offset, or plain dates
+  (`2026-10-20`). They narrow on the order's `created_at`. `from` is inclusive and
+  `to` is exclusive, so a plain date covers that whole day in Kazakhstan time
+  (`Asia/Almaty`, UTC+5, no daylight saving), the same rule as the day buckets below.
+  `from` at or after `to` is `400 VALIDATION_ERROR`.
+- `ticket_type_id` narrows the numbers to one ticket type of this event. A type that
+  does not exist or belongs to another event is `400 VALIDATION_ERROR`, not `404`, so
+  the parameter cannot be used to probe other events.
+
+```json
+{
+  "event": { "id": "uuid", "title": "...", "status": "published", "starts_at": "..." },
+  "filters": { "from": "..." | null, "to": "..." | null, "ticket_type_id": "uuid" | null },
+  "sales": { "capacity": 200, "held": 4, "sold": 52, "remaining": 148, "percent_sold": 26.0 },
+  "revenue": {
+    "currency": "KZT",
+    "is_demonstration": true,
+    "gross": 26000000,
+    "discounts": 1300000,
+    "refunds": 2600000,
+    "net": 22100000
+  },
+  "by_ticket_type": [
+    {
+      "ticket_type_id": "uuid",
+      "name": "Early Bird",
+      "price": 500000,
+      "is_hidden": false,
+      "capacity": 100,
+      "sold": 30,
+      "remaining": 70,
+      "gross": 15000000,
+      "registered": 28,
+      "checked_in": 20,
+      "absent": 8
+    }
+  ],
+  "check_in": { "registered": 40, "checked_in": 31, "absent": 9, "percent": 77.5 },
+  "over_time": [
+    { "date": "2026-10-20", "orders": 3, "tickets": 7, "gross": 3500000,
+      "discounts": 350000, "net": 3150000 }
+  ],
+  "campaigns": [
+    { "id": "uuid", "name": "Spring deal", "code": "SPRING25", "is_active": true,
+      "redemptions": 12, "orders": 9, "tickets_sold": 18,
+      "gross_revenue": 9000000, "discount_total": 1800000, "net_revenue": 7200000 }
+  ]
+}
+```
+
+Every money figure is an integer in tiyn.
+
+**Sales.** `capacity` is the sum of the ticket types' `quantity_total`, hidden types
+included; with `ticket_type_id` it is that one type's. `sold` counts the tickets of
+paid orders, so a refund or a cancellation takes its tickets back out and a pending
+order is not a sale yet. `held` is the seats in pending orders that have not expired:
+the public detail's `quantity_available` is `capacity - sold - held`, while
+`remaining` here is `capacity - sold`. `percent_sold` is `sold / capacity` in percent,
+one decimal, and `0` when capacity is `0`. With a date range, `sold` counts the tickets
+paid for in that range and `remaining` is capacity minus that figure, so leave the
+range empty for the inventory picture.
+
+**Revenue.** `gross` is the sum of `subtotal` over every order that reached paid,
+refunded ones included; `discounts` is the sum of their `discount`; `refunds` is the
+sum of `subtotal - discount` over the refunded ones; and `net` is
+`gross - discounts - refunds`, the money the organizer keeps. These are order-level
+figures: with `ticket_type_id` they count the orders that include at least one ticket
+of that type, in full, because a discount belongs to the whole order. The figures are
+demonstration money like every payment (SRS 4.6), and clients label them so. The 3%
+processing fee is not organizer revenue (decision 5): it is not in `gross`, and a
+refund hands it back to the attendee without appearing here, so `refunds` is smaller
+than the `amount` the refunds endpoint records, by exactly that fee.
+
+**By ticket type.** One row per ticket type of the event, hidden ones included, in
+the public detail's order (price, then name); with `ticket_type_id`, that one row.
+`sold` and `gross` come from the order items of paid orders, where `gross` is the
+recorded `unit_price` times `quantity`, before discounts. A discount is recorded per
+order and not per item, so it is not split across types: `revenue.discounts` is the
+only discount figure.
+
+**Attendance.** `registered` counts tickets in status `valid` or `checked_in`,
+`checked_in` counts the scanned ones, `absent` the ones still waiting, and `percent`
+is `checked_in / registered` in percent, one decimal, `0` when nothing is registered.
+Refunded and cancelled tickets are in none of the three: their holders gave them up
+before the door. The same numbers read correctly before the event, when they simply
+say nobody has been scanned yet.
+
+**Sales over time.** One entry per day with orders, oldest first, bucketed by the
+local (`Asia/Almaty`) day of the order's `created_at`; days without orders are left
+out instead of being filled with zeros. `orders` and `tickets` count the orders
+created that day that reached paid, refunded included, and `net` is
+`gross - discounts`. Refunds are not bucketed by day: a refund happens on a different
+day than the sale, so it shows in `revenue` only.
+
+**Campaigns.** The same numbers `GET /api/events/:id/promo-campaigns` reports, newest
+first, computed by the same helper. They are campaign lifetime figures and are not
+narrowed by `from` or `to`; with `ticket_type_id` the list keeps the campaigns that
+cover that type, and a campaign with no `ticket_type_ids` covers every type. A
+campaign report counts paid orders that stand, so `gross_revenue` there and
+`revenue.gross` here can differ: one measures redemptions, the other money.
+
+---
+
 ## Audit log
 
 Not an endpoint yet. Every organizer, admin, payment and refund action writes one entry
@@ -721,7 +1080,7 @@ Use these action names and no others. A new one goes into this table and into
 
 ## Not specified yet
 
-Promo codes, seat maps, support chat, analytics. We add these when we
+Seat maps, support chat. We add these when we
 get to them. Don't design them now.
 
 ---

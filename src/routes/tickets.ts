@@ -13,12 +13,15 @@ import { z } from 'zod';
 import { pool } from '../db/pool';
 import { AppError, ErrorCode } from '../lib/errors';
 import { signTicketPayload } from '../lib/qr';
+import { renderTicketPdf } from '../lib/ticket-pdf';
 import { requireAuth } from '../middleware/auth';
 
 export const ticketsRouter = Router();
 
 // Every ticket query starts here and adds its own WHERE. ticket_type_name comes from the
 // order item, the name the buyer saw, so renaming the tier later does not change it.
+// venue_address is read for the printable PDF only: it stays out of the API's ticket
+// object (docs/api.md).
 export const TICKET_SELECT = `SELECT t.id,
          t.code,
          t.status,
@@ -27,7 +30,8 @@ export const TICKET_SELECT = `SELECT t.id,
          e.id         AS event_id,
          e.title      AS event_title,
          e.starts_at  AS event_starts_at,
-         e.venue_name AS event_venue_name
+         e.venue_name AS event_venue_name,
+         e.venue_address AS event_venue_address
     FROM tickets t
     JOIN order_items oi ON oi.id = t.order_item_id
     JOIN orders o ON o.id = oi.order_id
@@ -43,6 +47,7 @@ export interface TicketRow {
   event_title: string;
   event_starts_at: Date;
   event_venue_name: string;
+  event_venue_address: string;
 }
 
 // docs/api.md "ticket" object.
@@ -127,6 +132,46 @@ ticketsRouter.get('/:id', requireAuth, async (req, res, next) => {
     }
 
     res.json({ ticket: toTicket(row) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/tickets/:id/pdf  - the printable ticket, rendered on every request
+// ---------------------------------------------------------------------------
+
+ticketsRouter.get('/:id/pdf', requireAuth, async (req, res, next) => {
+  try {
+    const parsed = idParamSchema.safeParse(req.params);
+    if (!parsed.success) {
+      throw AppError.badRequest('Ticket id must be a UUID');
+    }
+
+    // Same ownership clause as GET /:id, so a stranger's ticket is a 404 here too.
+    const result = await pool.query<TicketRow>(
+      `${TICKET_SELECT}
+        WHERE t.id = $1
+          AND o.user_id = $2`,
+      [parsed.data.id, req.user!.id],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      throw AppError.notFound(ErrorCode.TICKET_NOT_FOUND, 'Ticket not found');
+    }
+
+    // Every status prints: the page carries the status and the ticket's own qr_payload,
+    // so printed paper and the phone are one admission and the scanner decides what is
+    // valid (docs/decisions.md, decision 13).
+    const ticket = toTicket(row);
+    const pdf = await renderTicketPdf({
+      ...ticket,
+      event: { ...ticket.event, venue_address: row.event_venue_address },
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="biletflow-${ticket.code}.pdf"`);
+    res.send(pdf);
   } catch (err) {
     next(err);
   }
