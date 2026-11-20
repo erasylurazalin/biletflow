@@ -4,6 +4,9 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 import { ApiError, formatPrice, formatWhen, getOrder, payOrder, type Order } from '@/api';
+import { useI18n } from '@/i18n/client';
+import { errorText } from '@/i18n/errors';
+import { fill } from '@/i18n/format';
 import { clearSession, readToken } from '@/session';
 
 const buttonClass =
@@ -12,6 +15,7 @@ const buttonClass =
 function Checkout() {
   const { id: orderId } = useParams<{ id: string }>();
   const router = useRouter();
+  const { locale, t } = useI18n();
   const [order, setOrder] = useState<Order | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -41,14 +45,15 @@ function Checkout() {
         } else if (err instanceof ApiError && err.status === 404) {
           setNotFound(true);
         } else {
-          setError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.');
+          setError(errorText(err, t));
         }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [loginPath, orderId, router]);
+    // t only changes with the language, and refetching the order then is harmless.
+  }, [loginPath, orderId, router, t]);
 
   async function pay(simulateFailure = false) {
     if (pending) return;
@@ -72,7 +77,7 @@ function Checkout() {
       if (err instanceof ApiError && err.code === 'ORDER_EXPIRED') {
         setExpired(true);
       } else {
-        setError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.');
+        setError(errorText(err, t));
       }
     } finally {
       setPending(false);
@@ -80,7 +85,7 @@ function Checkout() {
   }
 
   if (notFound) {
-    return <h1 className="text-2xl font-semibold">Order not found</h1>;
+    return <h1 className="text-2xl font-semibold">{t.checkout.notFound}</h1>;
   }
 
   if (!order) {
@@ -91,7 +96,7 @@ function Checkout() {
             {error}
           </p>
         ) : (
-          <p className="text-sm text-zinc-600">Loading order…</p>
+          <p className="text-sm text-zinc-600">{t.checkout.loading}</p>
         )}
       </div>
     );
@@ -102,7 +107,7 @@ function Checkout() {
   return (
     <div className="mx-auto max-w-2xl">
       <Link href={eventLink} className="text-sm text-zinc-500 hover:text-zinc-800">
-        ← Event
+        {t.checkout.back}
       </Link>
       <h1 className="mt-4 text-2xl font-semibold">{order.event.title}</h1>
 
@@ -111,21 +116,36 @@ function Checkout() {
           <li key={item.ticket_type_id} className="flex items-center justify-between gap-4 py-4">
             <div>
               <p className="font-medium">{item.name}</p>
-              <p className="text-sm text-zinc-600">Quantity: {item.quantity}</p>
+              <p className="text-sm text-zinc-600">
+                {fill(t.checkout.quantity, { count: item.quantity })}
+              </p>
             </div>
-            <p className="text-sm text-zinc-700">{formatPrice(item.unit_price)} each</p>
+            <p className="text-sm text-zinc-700">
+              {fill(t.checkout.each, { price: formatPrice(item.unit_price, locale) })}
+            </p>
           </li>
         ))}
       </ul>
       <div className="mt-4 space-y-1 text-sm">
-        <p>Tickets: {formatPrice(order.subtotal)}</p>
+        <p>{fill(t.checkout.tickets, { amount: formatPrice(order.subtotal, locale) })}</p>
         {order.discount > 0 ? (
-          <p>Discount ({order.promo?.code ?? 'promo'}): -{formatPrice(order.discount)}</p>
+          <p>
+            {fill(t.checkout.discount, {
+              code: order.promo?.code ?? t.checkout.discountNoCode,
+              amount: formatPrice(order.discount, locale),
+            })}
+          </p>
         ) : null}
         {order.processing_fee > 0 ? (
-          <p>Processing charge (3%): {formatPrice(order.processing_fee)}</p>
+          <p>
+            {fill(t.checkout.processingCharge, {
+              amount: formatPrice(order.processing_fee, locale),
+            })}
+          </p>
         ) : null}
-        <p className="pt-1 text-lg font-semibold">Total: {formatPrice(order.total)}</p>
+        <p className="pt-1 text-lg font-semibold">
+          {fill(t.common.total, { amount: formatPrice(order.total, locale) })}
+        </p>
       </div>
 
       {error ? (
@@ -137,11 +157,13 @@ function Checkout() {
       {order.status === 'pending' && !expired ? (
         <section className="mt-6">
           {order.expires_at ? (
-            <p className="text-sm text-zinc-600">Reserved until {formatWhen(order.expires_at)}</p>
+            <p className="text-sm text-zinc-600">
+              {fill(t.checkout.reservedUntil, { when: formatWhen(order.expires_at, locale) })}
+            </p>
           ) : null}
           {order.total > 0 ? (
             <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-              Demonstration payment. No real money is charged and no card details are needed.
+              {t.checkout.demoNotice}
             </p>
           ) : null}
           <button
@@ -151,10 +173,10 @@ function Checkout() {
             className={`${buttonClass} mt-4`}
           >
             {pending
-              ? 'Processing…'
+              ? t.checkout.processing
               : order.total === 0
-                ? 'Confirm registration'
-                : `Pay ${formatPrice(order.total)} (simulated)`}
+                ? t.checkout.confirm
+                : fill(t.checkout.pay, { amount: formatPrice(order.total, locale) })}
           </button>
           {order.total > 0 ? (
             <button
@@ -163,7 +185,7 @@ function Checkout() {
               onClick={() => void pay(true)}
               className="mt-2 block rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 disabled:opacity-60"
             >
-              Simulate a failed payment
+              {t.checkout.simulateFailure}
             </button>
           ) : null}
         </section>
@@ -171,20 +193,22 @@ function Checkout() {
 
       {expired ? (
         <section className="mt-6 rounded-md bg-red-50 p-4 text-sm text-red-700">
-          <p>This reservation expired. Go back to the event to try again.</p>
+          <p>{t.checkout.expired}</p>
           <Link href={eventLink} className="mt-2 inline-block underline">
-            Back to the event
+            {t.checkout.backToEvent}
           </Link>
         </section>
       ) : null}
 
       {order.status === 'paid' ? (
         <section className="mt-8">
-          <h2 className="text-2xl font-semibold">You&apos;re in.</h2>
+          <h2 className="text-2xl font-semibold">{t.checkout.success}</h2>
           {order.payment ? (
             <p className="mt-3 text-sm text-zinc-600">
-              Simulated payment of {formatPrice(order.payment.amount)} ·{' '}
-              {formatWhen(order.payment.paid_at)}
+              {fill(t.checkout.simulatedPayment, {
+                amount: formatPrice(order.payment.amount, locale),
+                when: formatWhen(order.payment.paid_at, locale),
+              })}
             </p>
           ) : null}
           <ul className="mt-5 space-y-3">
@@ -193,12 +217,14 @@ function Checkout() {
                 <p className="font-medium">{ticket.code}</p>
                 <p className="mt-1 text-sm text-zinc-700">{ticket.ticket_type_name}</p>
                 <p className="text-sm text-zinc-600">{ticket.attendee_name}</p>
-                <p className="mt-1 text-sm text-zinc-500">Status: {ticket.status}</p>
+                <p className="mt-1 text-sm text-zinc-500">
+                  {fill(t.common.status, { status: t.ticketStatus[ticket.status] })}
+                </p>
               </li>
             ))}
           </ul>
           <Link href="/tickets" className="mt-5 inline-block text-sm font-medium underline">
-            My tickets
+            {t.tickets.title}
           </Link>
         </section>
       ) : null}
@@ -206,16 +232,18 @@ function Checkout() {
       {order.status === 'cancelled' || order.status === 'refunded' ? (
         <section className="mt-6">
           <p className="text-zinc-700">
-            This order was {order.status === 'cancelled' ? 'cancelled' : 'refunded'}.
+            {order.status === 'cancelled' ? t.checkout.cancelled : t.checkout.refunded}
           </p>
           {order.status === 'refunded' && order.refund ? (
             <p className="mt-2 text-sm text-zinc-600">
-              Refunded {formatPrice(order.refund.amount)} (simulated) on{' '}
-              {formatWhen(order.refund.refunded_at)}.
+              {fill(t.checkout.refundedOn, {
+                amount: formatPrice(order.refund.amount, locale),
+                when: formatWhen(order.refund.refunded_at, locale),
+              })}
             </p>
           ) : null}
           <Link href={eventLink} className="mt-3 inline-block text-sm font-medium underline">
-            Back to the event
+            {t.checkout.backToEvent}
           </Link>
         </section>
       ) : null}
@@ -224,8 +252,9 @@ function Checkout() {
 }
 
 export default function OrderPage() {
+  const { t } = useI18n();
   return (
-    <Suspense fallback={<p className="text-sm text-zinc-600">Loading order…</p>}>
+    <Suspense fallback={<p className="text-sm text-zinc-600">{t.checkout.loading}</p>}>
       <Checkout />
     </Suspense>
   );

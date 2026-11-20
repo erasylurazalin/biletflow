@@ -1,6 +1,10 @@
 // Public event reads and browser auth calls. Shapes match docs/api.md.
 // Money is tiyn (1 KZT = 100 tiyn).
 
+import type { Locale } from '@/i18n/config';
+import { dictionaries } from '@/i18n';
+import { formatDateTime, formatNumber } from '@/i18n/format';
+
 const DEFAULT_API_URL = 'http://127.0.0.1:3000';
 
 export type TicketType = {
@@ -303,7 +307,7 @@ async function apiGet<T>(path: string): Promise<T> {
   try {
     response = await fetch(url);
   } catch {
-    throw new ApiError(0, unreachableMessage());
+    throw new ApiError(0, unreachableMessage(), 'API_UNREACHABLE');
   }
 
   if (!response.ok) {
@@ -321,7 +325,7 @@ async function apiSend<T>(path: string, init: RequestInit): Promise<T> {
   try {
     response = await fetch(path, init);
   } catch {
-    throw new ApiError(0, unreachableMessage());
+    throw new ApiError(0, unreachableMessage(), 'API_UNREACHABLE');
   }
 
   if (!response.ok) {
@@ -368,7 +372,7 @@ export async function downloadTicketPdf(ticketId: string, token: string): Promis
       headers: { Authorization: `Bearer ${token}` },
     });
   } catch {
-    throw new ApiError(0, unreachableMessage());
+    throw new ApiError(0, unreachableMessage(), 'API_UNREACHABLE');
   }
 
   if (!response.ok) {
@@ -698,21 +702,17 @@ export async function getPromoByToken(token: string): Promise<PromoInfo> {
   return body.promo;
 }
 
-export function formatPrice(tiyn: number): string {
-  if (tiyn === 0) return 'Free';
-  return `${Math.round(tiyn / 100).toLocaleString('ru-KZ')} ₸`;
+export function formatPrice(tiyn: number, locale: Locale): string {
+  if (tiyn === 0) return dictionaries[locale].common.free;
+  return formatMoney(tiyn, locale);
 }
 
 // Money for figures that are not a ticket price: revenue of 0 is "0 ₸", not "Free"
 // (formatPrice is for ticket types, where 0 means the ticket costs nothing).
-export function formatMoney(tiyn: number): string {
-  return `${Math.round(tiyn / 100).toLocaleString('ru-KZ')} ₸`;
+export function formatMoney(tiyn: number, locale: Locale): string {
+  return `${formatNumber(Math.round(tiyn / 100), locale)} ₸`;
 }
 
-export function formatWhen(iso: string): string {
-  return new Date(iso).toLocaleString('ru-KZ', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-    timeZone: 'Asia/Almaty',
-  });
+export function formatWhen(iso: string, locale: Locale): string {
+  return formatDateTime(iso, locale);
 }

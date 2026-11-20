@@ -10,6 +10,9 @@ import {
   type AnalyticsFilters,
   type EventAnalytics,
 } from '@/api';
+import { useI18n } from '@/i18n/client';
+import { errorText } from '@/i18n/errors';
+import { fill, plural } from '@/i18n/format';
 import { clearSession, readToken } from '@/session';
 
 const buttonClass =
@@ -24,6 +27,7 @@ const fieldClass =
 function EventAnalyticsPage() {
   const { id: eventId } = useParams<{ id: string }>();
   const router = useRouter();
+  const { locale, t } = useI18n();
   const [data, setData] = useState<EventAnalytics | null>(null);
   const [types, setTypes] = useState<EventAnalytics['by_ticket_type']>([]);
   const [pending, setPending] = useState(false);
@@ -42,12 +46,12 @@ function EventAnalyticsPage() {
         return;
       }
       if (err instanceof ApiError && err.status === 403) {
-        setError("Only the event's organizer can see its analytics");
+        setError(t.analytics.ownerOnly);
         return;
       }
-      setError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.');
+      setError(errorText(err, t));
     },
-    [loginPath, router],
+    [loginPath, router, t],
   );
 
   // The buttons fetch through this, and the first load does the same inline below, the
@@ -113,34 +117,33 @@ function EventAnalyticsPage() {
     <div className="mx-auto max-w-3xl">
       <div className="flex flex-wrap items-center gap-4 text-sm">
         <Link href={`/events/${eventId}`} className="text-zinc-500 hover:text-zinc-800">
-          ← Event
+          {t.organizer.back}
         </Link>
         <Link
           href={`/organizer/events/${eventId}/orders`}
           className="text-zinc-500 hover:text-zinc-800"
         >
-          Orders
+          {t.organizer.orders}
         </Link>
         <Link
           href={`/organizer/events/${eventId}/staff`}
           className="text-zinc-500 hover:text-zinc-800"
         >
-          Staff
+          {t.organizer.staff}
         </Link>
         <Link
           href={`/organizer/events/${eventId}/promo`}
           className="text-zinc-500 hover:text-zinc-800"
         >
-          Promo codes
+          {t.organizer.promoCodes}
         </Link>
       </div>
 
       <h1 className="mt-4 text-2xl font-semibold">
-        Analytics{data ? `: ${data.event.title}` : ''}
+        {data ? fill(t.analytics.titleWithEvent, { event: data.event.title }) : t.analytics.title}
       </h1>
       <p className="mt-2 text-sm text-zinc-600">
-        Sales, revenue and attendance for this event. All money is simulated demonstration data: no
-        real payments or refunds happen.
+        {t.analytics.intro}
       </p>
 
       {error ? (
@@ -157,7 +160,7 @@ function EventAnalyticsPage() {
         }}
       >
         <label className="flex flex-col gap-1 text-sm text-zinc-700">
-          From
+          {t.analytics.from}
           <input
             type="date"
             value={from}
@@ -166,7 +169,7 @@ function EventAnalyticsPage() {
           />
         </label>
         <label className="flex flex-col gap-1 text-sm text-zinc-700">
-          To
+          {t.analytics.to}
           <input
             type="date"
             value={to}
@@ -175,23 +178,23 @@ function EventAnalyticsPage() {
           />
         </label>
         <label className="flex flex-col gap-1 text-sm text-zinc-700">
-          Ticket type
+          {t.analytics.ticketType}
           <select
             value={ticketTypeId}
             onChange={(event) => setTicketTypeId(event.target.value)}
             className={fieldClass}
           >
-            <option value="">Every ticket type</option>
+            <option value="">{t.analytics.everyTicketType}</option>
             {types.map((type) => (
               <option key={type.ticket_type_id} value={type.ticket_type_id}>
                 {type.name}
-                {type.is_hidden ? ' (hidden)' : ''}
+                {type.is_hidden ? ` (${t.organizer.hidden})` : ''}
               </option>
             ))}
           </select>
         </label>
         <button type="submit" disabled={pending} className={buttonClass}>
-          {pending ? 'Loading…' : 'Apply'}
+          {pending ? t.common.loading : t.analytics.apply}
         </button>
         {filtered ? (
           <button
@@ -200,104 +203,108 @@ function EventAnalyticsPage() {
             onClick={clear}
             className="rounded-md border border-zinc-300 px-3 py-2 text-sm text-zinc-700 disabled:opacity-60"
           >
-            Clear
+            {t.analytics.clear}
           </button>
         ) : null}
       </form>
 
-      {!data && !error ? <p className="mt-6 text-sm text-zinc-600">Loading analytics…</p> : null}
+      {!data && !error ? <p className="mt-6 text-sm text-zinc-600">{t.analytics.loading}</p> : null}
 
       {data ? (
         <>
           {filtered ? (
             <p className="mt-4 text-sm text-zinc-600">
-              Showing {data.filters.from ? `orders from ${data.filters.from}` : 'every order'}
-              {data.filters.to ? ` up to ${data.filters.to}, not including it` : ''}
-              {data.filters.ticket_type_id
-                ? ', counted for orders that include the chosen ticket type'
-                : ''}
-              . Campaign numbers are lifetime figures and do not follow the filter.
+              {fill(t.analytics.showing, {
+                range: fill(
+                  data.filters.from && data.filters.to
+                    ? t.analytics.rangeFromTo
+                    : data.filters.from
+                      ? t.analytics.rangeFrom
+                      : data.filters.to
+                        ? t.analytics.rangeTo
+                        : t.analytics.rangeAll,
+                  { from: data.filters.from ?? '', to: data.filters.to ?? '' },
+                ),
+                type: data.filters.ticket_type_id ? t.analytics.typeNote : '',
+              })}
             </p>
           ) : null}
 
           <section aria-labelledby="sales-heading" className="mt-8">
             <h2 id="sales-heading" className="text-lg font-semibold">
-              Capacity and sales
+              {t.analytics.sales}
             </h2>
             <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <div className="rounded-lg border border-zinc-200 bg-white p-4">
-                <dt className="text-sm text-zinc-600">Capacity</dt>
+                <dt className="text-sm text-zinc-600">{t.analytics.capacity}</dt>
                 <dd className="mt-1 text-xl font-semibold">{data.sales.capacity}</dd>
               </div>
               <div className="rounded-lg border border-zinc-200 bg-white p-4">
-                <dt className="text-sm text-zinc-600">Sold</dt>
+                <dt className="text-sm text-zinc-600">{t.analytics.sold}</dt>
                 <dd className="mt-1 text-xl font-semibold">{data.sales.sold}</dd>
               </div>
               <div className="rounded-lg border border-zinc-200 bg-white p-4">
-                <dt className="text-sm text-zinc-600">Remaining</dt>
+                <dt className="text-sm text-zinc-600">{t.analytics.remaining}</dt>
                 <dd className="mt-1 text-xl font-semibold">{data.sales.remaining}</dd>
               </div>
               <div className="rounded-lg border border-zinc-200 bg-white p-4">
-                <dt className="text-sm text-zinc-600">Sold, percent</dt>
+                <dt className="text-sm text-zinc-600">{t.analytics.percentSold}</dt>
                 <dd className="mt-1 text-xl font-semibold">{data.sales.percent_sold}%</dd>
               </div>
             </dl>
             <p className="mt-2 text-sm text-zinc-600">
-              {data.sales.held === 1
-                ? '1 seat is held by an unpaid order that has not expired.'
-                : `${data.sales.held} seats are held by unpaid orders that have not expired.`}
+              {plural(locale, t.analytics.held, data.sales.held)}
             </p>
           </section>
 
           <section aria-labelledby="revenue-heading" className="mt-8">
             <h2 id="revenue-heading" className="text-lg font-semibold">
-              Revenue (simulated)
+              {t.analytics.revenue}
             </h2>
             <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <div className="rounded-lg border border-zinc-200 bg-white p-4">
-                <dt className="text-sm text-zinc-600">Gross sales</dt>
-                <dd className="mt-1 text-xl font-semibold">{formatMoney(data.revenue.gross)}</dd>
+                <dt className="text-sm text-zinc-600">{t.analytics.grossSales}</dt>
+                <dd className="mt-1 text-xl font-semibold">{formatMoney(data.revenue.gross, locale)}</dd>
               </div>
               <div className="rounded-lg border border-zinc-200 bg-white p-4">
-                <dt className="text-sm text-zinc-600">Discounts</dt>
+                <dt className="text-sm text-zinc-600">{t.analytics.discounts}</dt>
                 <dd className="mt-1 text-xl font-semibold">
-                  {formatMoney(data.revenue.discounts)}
+                  {formatMoney(data.revenue.discounts, locale)}
                 </dd>
               </div>
               <div className="rounded-lg border border-zinc-200 bg-white p-4">
-                <dt className="text-sm text-zinc-600">Refunds</dt>
-                <dd className="mt-1 text-xl font-semibold">{formatMoney(data.revenue.refunds)}</dd>
+                <dt className="text-sm text-zinc-600">{t.analytics.refunds}</dt>
+                <dd className="mt-1 text-xl font-semibold">{formatMoney(data.revenue.refunds, locale)}</dd>
               </div>
               <div className="rounded-lg border border-zinc-200 bg-white p-4">
-                <dt className="text-sm text-zinc-600">Net revenue</dt>
-                <dd className="mt-1 text-xl font-semibold">{formatMoney(data.revenue.net)}</dd>
+                <dt className="text-sm text-zinc-600">{t.analytics.netRevenue}</dt>
+                <dd className="mt-1 text-xl font-semibold">{formatMoney(data.revenue.net, locale)}</dd>
               </div>
             </dl>
             <p className="mt-2 text-sm text-zinc-600">
-              The 3% processing charge is paid by the attendee and is not organizer revenue, so it
-              is in none of these figures.
+              {t.analytics.feeNote}
             </p>
           </section>
 
           <section aria-labelledby="attendance-heading" className="mt-8">
             <h2 id="attendance-heading" className="text-lg font-semibold">
-              Attendance
+              {t.analytics.attendance}
             </h2>
             <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <div className="rounded-lg border border-zinc-200 bg-white p-4">
-                <dt className="text-sm text-zinc-600">Tickets</dt>
+                <dt className="text-sm text-zinc-600">{t.analytics.tickets}</dt>
                 <dd className="mt-1 text-xl font-semibold">{data.check_in.registered}</dd>
               </div>
               <div className="rounded-lg border border-zinc-200 bg-white p-4">
-                <dt className="text-sm text-zinc-600">Checked in</dt>
+                <dt className="text-sm text-zinc-600">{t.analytics.checkedIn}</dt>
                 <dd className="mt-1 text-xl font-semibold">{data.check_in.checked_in}</dd>
               </div>
               <div className="rounded-lg border border-zinc-200 bg-white p-4">
-                <dt className="text-sm text-zinc-600">Absent</dt>
+                <dt className="text-sm text-zinc-600">{t.analytics.absent}</dt>
                 <dd className="mt-1 text-xl font-semibold">{data.check_in.absent}</dd>
               </div>
               <div className="rounded-lg border border-zinc-200 bg-white p-4">
-                <dt className="text-sm text-zinc-600">Checked in, percent</dt>
+                <dt className="text-sm text-zinc-600">{t.analytics.percentCheckedIn}</dt>
                 <dd className="mt-1 text-xl font-semibold">{data.check_in.percent}%</dd>
               </div>
             </dl>
@@ -305,32 +312,32 @@ function EventAnalyticsPage() {
 
           <section aria-labelledby="types-heading" className="mt-8">
             <h2 id="types-heading" className="text-lg font-semibold">
-              By ticket type
+              {t.analytics.byType}
             </h2>
             <div className="mt-3 overflow-x-auto rounded-lg border border-zinc-200 bg-white">
               <table className="w-full text-left text-sm">
                 <thead className="bg-zinc-50 text-zinc-600">
                   <tr>
                     <th scope="col" className="px-4 py-2 font-medium">
-                      Ticket type
+                      {t.analytics.ticketType}
                     </th>
                     <th scope="col" className="px-4 py-2 font-medium">
-                      Capacity
+                      {t.analytics.capacity}
                     </th>
                     <th scope="col" className="px-4 py-2 font-medium">
-                      Sold
+                      {t.analytics.sold}
                     </th>
                     <th scope="col" className="px-4 py-2 font-medium">
-                      Remaining
+                      {t.analytics.remaining}
                     </th>
                     <th scope="col" className="px-4 py-2 font-medium">
-                      Gross
+                      {t.analytics.gross}
                     </th>
                     <th scope="col" className="px-4 py-2 font-medium">
-                      Checked in
+                      {t.analytics.checkedIn}
                     </th>
                     <th scope="col" className="px-4 py-2 font-medium">
-                      Absent
+                      {t.analytics.absent}
                     </th>
                   </tr>
                 </thead>
@@ -338,7 +345,7 @@ function EventAnalyticsPage() {
                   {data.by_ticket_type.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="px-4 py-3 text-zinc-600">
-                        This event has no ticket types yet.
+                        {t.organizer.noTicketTypes}
                       </td>
                     </tr>
                   ) : null}
@@ -347,13 +354,13 @@ function EventAnalyticsPage() {
                       <td className="px-4 py-2">
                         {type.name}
                         {type.is_hidden ? (
-                          <span className="ml-2 text-xs text-zinc-500">hidden</span>
+                          <span className="ml-2 text-xs text-zinc-500">{t.organizer.hidden}</span>
                         ) : null}
                       </td>
                       <td className="px-4 py-2">{type.capacity}</td>
                       <td className="px-4 py-2">{type.sold}</td>
                       <td className="px-4 py-2">{type.remaining}</td>
-                      <td className="px-4 py-2">{formatMoney(type.gross)}</td>
+                      <td className="px-4 py-2">{formatMoney(type.gross, locale)}</td>
                       <td className="px-4 py-2">{type.checked_in}</td>
                       <td className="px-4 py-2">{type.absent}</td>
                     </tr>
@@ -362,33 +369,32 @@ function EventAnalyticsPage() {
               </table>
             </div>
             <p className="mt-2 text-sm text-zinc-600">
-              Gross here is before discounts: a discount is recorded for the whole order, so it is
-              not split between ticket types.
+              {t.analytics.byTypeNote}
             </p>
           </section>
 
           <section aria-labelledby="time-heading" className="mt-8">
             <h2 id="time-heading" className="text-lg font-semibold">
-              Sales over time
+              {t.analytics.overTime}
             </h2>
             <div className="mt-3 overflow-x-auto rounded-lg border border-zinc-200 bg-white">
               <table className="w-full text-left text-sm">
                 <thead className="bg-zinc-50 text-zinc-600">
                   <tr>
                     <th scope="col" className="px-4 py-2 font-medium">
-                      Day
+                      {t.analytics.day}
                     </th>
                     <th scope="col" className="px-4 py-2 font-medium">
-                      Orders
+                      {t.analytics.orders}
                     </th>
                     <th scope="col" className="px-4 py-2 font-medium">
-                      Tickets
+                      {t.analytics.tickets}
                     </th>
                     <th scope="col" className="px-4 py-2 font-medium">
-                      Gross
+                      {t.analytics.gross}
                     </th>
                     <th scope="col" className="px-4 py-2 font-medium">
-                      Net
+                      {t.analytics.net}
                     </th>
                   </tr>
                 </thead>
@@ -396,7 +402,7 @@ function EventAnalyticsPage() {
                   {data.over_time.length === 0 ? (
                     <tr>
                       <td colSpan={5} className="px-4 py-3 text-zinc-600">
-                        No orders in this period.
+                        {t.analytics.noOrders}
                       </td>
                     </tr>
                   ) : null}
@@ -405,28 +411,25 @@ function EventAnalyticsPage() {
                       <td className="px-4 py-2">{day.date}</td>
                       <td className="px-4 py-2">{day.orders}</td>
                       <td className="px-4 py-2">{day.tickets}</td>
-                      <td className="px-4 py-2">{formatMoney(day.gross)}</td>
-                      <td className="px-4 py-2">{formatMoney(day.net)}</td>
+                      <td className="px-4 py-2">{formatMoney(day.gross, locale)}</td>
+                      <td className="px-4 py-2">{formatMoney(day.net, locale)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
             <p className="mt-2 text-sm text-zinc-600">
-              Days follow Kazakhstan time. Refunds are not shown by day, because a refund happens on
-              a different day than the sale; they are in the revenue figures above.
+              {t.analytics.overTimeNote}
             </p>
           </section>
 
           <section aria-labelledby="campaigns-heading" className="mt-8">
             <h2 id="campaigns-heading" className="text-lg font-semibold">
-              Campaigns
+              {t.analytics.campaigns}
             </h2>
             {data.campaigns.length === 0 ? (
               <p className="mt-3 text-sm text-zinc-600">
-                {filtered
-                  ? 'No promo campaigns cover the ticket type in this filter.'
-                  : 'This event has no promo campaigns yet.'}
+                {filtered ? t.analytics.noCampaignsFiltered : t.analytics.noCampaigns}
               </p>
             ) : (
               <ul className="mt-3 divide-y divide-zinc-200 rounded-lg border border-zinc-200 bg-white px-5">
@@ -436,21 +439,22 @@ function EventAnalyticsPage() {
                       <div>
                         <p className="text-sm font-medium text-zinc-900">{campaign.name}</p>
                         <p className="mt-1 text-sm text-zinc-600">
-                          Code {campaign.code}
-                          {campaign.is_active ? '' : ' (switched off)'}
+                          {fill(t.analytics.code, { code: campaign.code })}
+                          {campaign.is_active ? '' : t.analytics.switchedOff}
                         </p>
                       </div>
                       <p className="text-sm text-zinc-600">
-                        {campaign.redemptions}{' '}
-                        {campaign.redemptions === 1 ? 'redemption' : 'redemptions'}
+                        {plural(locale, t.analytics.redemptions, campaign.redemptions)}
                       </p>
                     </div>
                     <p className="mt-2 text-sm text-zinc-600">
-                      {campaign.orders} {campaign.orders === 1 ? 'order' : 'orders'},{' '}
-                      {campaign.tickets_sold} {campaign.tickets_sold === 1 ? 'ticket' : 'tickets'},
-                      gross {formatMoney(campaign.gross_revenue)}, discounts{' '}
-                      {formatMoney(campaign.discount_total)}, net{' '}
-                      {formatMoney(campaign.net_revenue)}
+                      {fill(t.analytics.campaignReport, {
+                        orders: plural(locale, t.organizer.orderCount, campaign.orders),
+                        tickets: plural(locale, t.organizer.ticketCount, campaign.tickets_sold),
+                        gross: formatMoney(campaign.gross_revenue, locale),
+                        discounts: formatMoney(campaign.discount_total, locale),
+                        net: formatMoney(campaign.net_revenue, locale),
+                      })}
                     </p>
                   </li>
                 ))}
@@ -464,8 +468,9 @@ function EventAnalyticsPage() {
 }
 
 export default function EventAnalyticsRoute() {
+  const { t } = useI18n();
   return (
-    <Suspense fallback={<p className="text-sm text-zinc-600">Loading analytics…</p>}>
+    <Suspense fallback={<p className="text-sm text-zinc-600">{t.analytics.loading}</p>}>
       <EventAnalyticsPage />
     </Suspense>
   );

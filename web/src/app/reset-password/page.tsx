@@ -2,7 +2,9 @@
 
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useState, type FormEvent } from 'react';
-import { ApiError, confirmPasswordReset } from '@/api';
+import { confirmPasswordReset } from '@/api';
+import { useI18n } from '@/i18n/client';
+import { errorText } from '@/i18n/errors';
 import { saveSession } from '@/session';
 
 const fieldClass =
@@ -10,6 +12,7 @@ const fieldClass =
 
 function ResetPassword() {
   const router = useRouter();
+  const { t } = useI18n();
   const searchParams = useSearchParams();
   const token = searchParams.get('token');
   const [pending, setPending] = useState(false);
@@ -28,22 +31,22 @@ function ResetPassword() {
       router.push('/');
       router.refresh();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.');
+      setError(errorText(err, t));
     } finally {
       setPending(false);
     }
   }
 
-  if (!token) return <p className="text-sm text-zinc-700">This link is missing its token.</p>;
+  if (!token) return <p className="text-sm text-zinc-700">{t.common.missingToken}</p>;
 
   return (
     <form
       onSubmit={onSubmit}
       className="mx-auto w-full max-w-sm rounded-lg border border-zinc-200 bg-white p-6"
     >
-      <h1 className="text-xl font-semibold">Set a new password</h1>
+      <h1 className="text-xl font-semibold">{t.resetPassword.title}</h1>
       <label className="mt-4 block text-sm font-medium">
-        New password
+        {t.resetPassword.newPassword}
         <input
           name="password"
           type="password"
@@ -63,15 +66,16 @@ function ResetPassword() {
         disabled={pending}
         className="mt-5 w-full rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
       >
-        {pending ? 'Please wait…' : 'Set new password'}
+        {pending ? t.common.pleaseWait : t.resetPassword.submit}
       </button>
     </form>
   );
 }
 
 export default function ResetPasswordPage() {
+  const { t } = useI18n();
   return (
-    <Suspense fallback={<p className="text-sm text-zinc-600">Loading…</p>}>
+    <Suspense fallback={<p className="text-sm text-zinc-600">{t.common.loading}</p>}>
       <ResetPassword />
     </Suspense>
   );

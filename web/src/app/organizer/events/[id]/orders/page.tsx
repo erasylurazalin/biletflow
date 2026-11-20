@@ -12,6 +12,9 @@ import {
   refundOrder,
   type OrganizerOrder,
 } from '@/api';
+import { useI18n } from '@/i18n/client';
+import { errorText } from '@/i18n/errors';
+import { fill, plural } from '@/i18n/format';
 import { clearSession, readToken } from '@/session';
 
 const buttonClass =
@@ -20,6 +23,7 @@ const buttonClass =
 function EventOrders() {
   const { id: eventId } = useParams<{ id: string }>();
   const router = useRouter();
+  const { locale, t } = useI18n();
   const [orders, setOrders] = useState<OrganizerOrder[] | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,12 +38,12 @@ function EventOrders() {
         return;
       }
       if (err instanceof ApiError && err.status === 403) {
-        setError("Only the event's organizer can see its orders");
+        setError(t.organizerOrders.ownerOnly);
         return;
       }
-      setError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.');
+      setError(errorText(err, t));
     },
-    [loginPath, router],
+    [loginPath, router, t],
   );
 
   const refresh = useCallback(async () => {
@@ -108,11 +112,11 @@ function EventOrders() {
   return (
     <div className="mx-auto max-w-2xl">
       <Link href={`/events/${eventId}`} className="text-sm text-zinc-500 hover:text-zinc-800">
-        ← Event
+        {t.organizer.back}
       </Link>
-      <h1 className="mt-4 text-2xl font-semibold">Orders</h1>
+      <h1 className="mt-4 text-2xl font-semibold">{t.organizerOrders.title}</h1>
       <p className="mt-2 text-sm text-zinc-600">
-        Every order for this event. Refunds are full and simulated: no real money moves.
+        {t.organizerOrders.intro}
       </p>
 
       {error ? (
@@ -121,7 +125,7 @@ function EventOrders() {
         </p>
       ) : null}
 
-      {loading ? <p className="mt-6 text-sm text-zinc-600">Loading orders…</p> : null}
+      {loading ? <p className="mt-6 text-sm text-zinc-600">{t.organizerOrders.loading}</p> : null}
       {!loading && !orders && error ? (
         <button
           type="button"
@@ -129,14 +133,14 @@ function EventOrders() {
           onClick={() => void refresh()}
           className={`${buttonClass} mt-4`}
         >
-          {pending === 'refresh' ? 'Loading…' : 'Try again'}
+          {pending === 'refresh' ? t.common.loading : t.organizer.tryAgain}
         </button>
       ) : null}
 
       {orders ? (
         <ul className="mt-6 divide-y divide-zinc-200 rounded-lg border border-zinc-200 bg-white px-5">
           {orders.length === 0 ? (
-            <li className="py-4 text-sm text-zinc-600">Nobody has ordered yet.</li>
+            <li className="py-4 text-sm text-zinc-600">{t.organizerOrders.empty}</li>
           ) : null}
           {orders.map((order) => (
             <li key={order.id} className="py-4">
@@ -145,23 +149,28 @@ function EventOrders() {
                   <p className="text-sm font-medium text-zinc-900">{order.buyer.name}</p>
                   <p className="text-sm text-zinc-600">{order.buyer.email}</p>
                   <p className="mt-1 text-sm text-zinc-600">
-                    {order.ticket_count}{' '}
-                    {order.ticket_count === 1 ? 'ticket' : 'tickets'}
-                    {order.checked_in_count > 0 ? `, ${order.checked_in_count} checked in` : ''}
+                    {plural(locale, t.organizer.ticketCount, order.ticket_count)}
+                    {order.checked_in_count > 0
+                      ? fill(t.organizerOrders.checkedIn, { count: order.checked_in_count })
+                      : ''}
                     {' · '}
-                    {formatWhen(order.created_at)}
+                    {formatWhen(order.created_at, locale)}
                   </p>
                 </div>
                 <div className="text-right">
-                  <p className="text-sm font-medium text-zinc-900">{formatPrice(order.total)}</p>
-                  <p className="text-sm text-zinc-600">{order.status}</p>
+                  <p className="text-sm font-medium text-zinc-900">
+                    {formatPrice(order.total, locale)}
+                  </p>
+                  <p className="text-sm text-zinc-600">{t.orderStatus[order.status]}</p>
                 </div>
               </div>
 
               {order.status === 'refunded' && order.refund ? (
                 <p className="mt-2 text-sm text-zinc-600">
-                  Refunded {formatPrice(order.refund.amount)} (simulated) on{' '}
-                  {formatWhen(order.refund.refunded_at)}
+                  {fill(t.organizerOrders.refundedOn, {
+                    amount: formatPrice(order.refund.amount, locale),
+                    when: formatWhen(order.refund.refunded_at, locale),
+                  })}
                 </p>
               ) : null}
 
@@ -174,13 +183,18 @@ function EventOrders() {
                       onClick={() =>
                         void perform(
                           `refund:${order.id}`,
-                          `Refund ${formatPrice(order.total)} for ${order.buyer.name}'s order (simulated, full refund)?`,
+                          fill(t.organizerOrders.confirmRefund, {
+                            amount: formatPrice(order.total, locale),
+                            name: order.buyer.name,
+                          }),
                           (token) => refundOrder(eventId, order.id, token),
                         )
                       }
                       className={buttonClass}
                     >
-                      {pending === `refund:${order.id}` ? 'Refunding…' : 'Refund'}
+                      {pending === `refund:${order.id}`
+                        ? t.organizerOrders.refunding
+                        : t.organizerOrders.refund}
                     </button>
                   ) : (
                     <button
@@ -189,13 +203,18 @@ function EventOrders() {
                       onClick={() =>
                         void perform(
                           `cancel:${order.id}`,
-                          `Cancel ${order.buyer.name}'s free registration (${order.ticket_count} tickets)?`,
+                          fill(t.organizerOrders.confirmCancel, {
+                            name: order.buyer.name,
+                            tickets: plural(locale, t.organizer.ticketCount, order.ticket_count),
+                          }),
                           (token) => cancelRegistration(eventId, order.id, token),
                         )
                       }
                       className={buttonClass}
                     >
-                      {pending === `cancel:${order.id}` ? 'Cancelling…' : 'Cancel registration'}
+                      {pending === `cancel:${order.id}`
+                        ? t.organizerOrders.cancelling
+                        : t.organizerOrders.cancel}
                     </button>
                   )}
                 </div>
@@ -209,8 +228,9 @@ function EventOrders() {
 }
 
 export default function EventOrdersPage() {
+  const { t } = useI18n();
   return (
-    <Suspense fallback={<p className="text-sm text-zinc-600">Loading orders…</p>}>
+    <Suspense fallback={<p className="text-sm text-zinc-600">{t.organizerOrders.loading}</p>}>
       <EventOrders />
     </Suspense>
   );

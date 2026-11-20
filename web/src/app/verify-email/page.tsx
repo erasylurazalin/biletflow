@@ -3,14 +3,19 @@
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
-import { ApiError, verifyEmail } from '@/api';
+import { verifyEmail } from '@/api';
+import { useI18n } from '@/i18n/client';
+import { errorText } from '@/i18n/errors';
 import { readToken, saveSession } from '@/session';
 
 function VerifyEmail() {
   const searchParams = useSearchParams();
+  const { t } = useI18n();
   const token = searchParams.get('token');
   const [verified, setVerified] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // The error itself, not its text: the token works once, so a language switch must
+  // translate what is shown instead of running the request again.
+  const [error, setError] = useState<unknown>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -25,7 +30,7 @@ function VerifyEmail() {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.');
+        setError(err ?? new Error());
       });
 
     return () => {
@@ -33,39 +38,40 @@ function VerifyEmail() {
     };
   }, [token]);
 
-  if (!token) return <p className="text-sm text-zinc-700">This link is missing its token.</p>;
+  if (!token) return <p className="text-sm text-zinc-700">{t.common.missingToken}</p>;
 
   return (
     <div className="mx-auto w-full max-w-sm rounded-lg border border-zinc-200 bg-white p-6">
       {verified ? (
         <>
-          <h1 className="text-xl font-semibold">Your email is verified.</h1>
+          <h1 className="text-xl font-semibold">{t.verifyEmail.verified}</h1>
           <Link href="/" className="mt-4 inline-block text-sm text-zinc-600 hover:text-zinc-900">
-            Go to the home page
+            {t.verifyEmail.home}
           </Link>
         </>
-      ) : error ? (
+      ) : error !== null ? (
         <>
           <p role="alert" className="text-sm text-red-700">
-            {error}
+            {errorText(error, t)}
           </p>
           <Link
             href="/inbox"
             className="mt-4 inline-block text-sm text-zinc-600 hover:text-zinc-900"
           >
-            Open the simulated inbox
+            {t.common.openInbox}
           </Link>
         </>
       ) : (
-        <p className="text-sm text-zinc-600">Verifying your email…</p>
+        <p className="text-sm text-zinc-600">{t.verifyEmail.verifying}</p>
       )}
     </div>
   );
 }
 
 export default function VerifyEmailPage() {
+  const { t } = useI18n();
   return (
-    <Suspense fallback={<p className="text-sm text-zinc-600">Verifying your email…</p>}>
+    <Suspense fallback={<p className="text-sm text-zinc-600">{t.verifyEmail.verifying}</p>}>
       <VerifyEmail />
     </Suspense>
   );

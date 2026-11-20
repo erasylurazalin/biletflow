@@ -10,18 +10,28 @@ import {
   type PromoInfo,
   type TicketType,
 } from '@/api';
+import { useI18n } from '@/i18n/client';
+import type { Locale } from '@/i18n/config';
+import { errorText } from '@/i18n/errors';
+import { fill, plural } from '@/i18n/format';
+import type { Dictionary } from '@/i18n';
 import { clearSession, readToken } from '@/session';
 
-function unavailableReason(ticket: TicketType, paidSalesActive: boolean): string | null {
-  if (ticket.quantity_available === 0) return 'Sold out';
-  if (ticket.price > 0 && !paidSalesActive) return 'Not on sale yet';
+function unavailableReason(
+  ticket: TicketType,
+  paidSalesActive: boolean,
+  locale: Locale,
+  t: Dictionary,
+): string | null {
+  if (ticket.quantity_available === 0) return t.picker.soldOut;
+  if (ticket.price > 0 && !paidSalesActive) return t.picker.notOnSaleYet;
 
   const now = Date.now();
   if (ticket.sales_start_at && now < new Date(ticket.sales_start_at).getTime()) {
-    return `On sale from ${formatWhen(ticket.sales_start_at)}`;
+    return fill(t.picker.onSaleFrom, { when: formatWhen(ticket.sales_start_at, locale) });
   }
   if (ticket.sales_end_at && now > new Date(ticket.sales_end_at).getTime()) {
-    return 'Sales ended';
+    return t.picker.salesEnded;
   }
   return null;
 }
@@ -38,6 +48,7 @@ export function TicketPicker({
   promo?: PromoInfo | null;
 }) {
   const router = useRouter();
+  const { locale, t } = useI18n();
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [attendeeNames, setAttendeeNames] = useState<Record<string, string[]>>({});
   const [pending, setPending] = useState(false);
@@ -111,10 +122,10 @@ export function TicketPicker({
         return;
       }
       if (err instanceof ApiError && err.code === 'PROMO_CODE_INVALID') {
-        setPromoError(err.message);
+        setPromoError(errorText(err, t));
         return;
       }
-      setError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.');
+      setError(errorText(err, t));
     } finally {
       setPending(false);
     }
@@ -124,7 +135,7 @@ export function TicketPicker({
     <div>
       <ul className="space-y-3">
         {orderable.map((ticket) => {
-          const reason = unavailableReason(ticket, paidSalesActive);
+          const reason = unavailableReason(ticket, paidSalesActive, locale, t);
           const maximum = Math.min(10, ticket.quantity_available);
           return (
             <li
@@ -133,14 +144,16 @@ export function TicketPicker({
             >
               <div>
                 <div className="font-medium">{ticket.name}</div>
-                <div className="text-sm text-zinc-500">{formatPrice(ticket.price)}</div>
-                <div className="mt-1 text-sm text-zinc-500">{ticket.quantity_available} left</div>
+                <div className="text-sm text-zinc-500">{formatPrice(ticket.price, locale)}</div>
+                <div className="mt-1 text-sm text-zinc-500">
+                  {plural(locale, t.picker.left, ticket.quantity_available)}
+                </div>
               </div>
               {reason ? (
                 <span className="text-right text-sm text-zinc-500">{reason}</span>
               ) : (
                 <select
-                  aria-label={`Quantity for ${ticket.name}`}
+                  aria-label={fill(t.picker.quantityFor, { name: ticket.name })}
                   value={quantities[ticket.id] ?? 0}
                   onChange={(event) =>
                     setQuantities((current) => ({
@@ -167,12 +180,12 @@ export function TicketPicker({
             Array.from({ length: quantities[ticket.id] ?? 0 }, (_, index) => (
               <label key={`${ticket.id}-${index}`} className="block text-sm">
                 <span className="mb-1 block font-medium">
-                  {ticket.name}, ticket {index + 1}: attendee name
+                  {fill(t.picker.attendeeName, { name: ticket.name, number: index + 1 })}
                 </span>
                 <input
                   type="text"
                   maxLength={100}
-                  placeholder="Your name"
+                  placeholder={t.picker.yourName}
                   value={attendeeNames[ticket.id]?.[index] ?? ''}
                   onChange={(event) =>
                     setAttendeeNames((current) => {
@@ -190,13 +203,13 @@ export function TicketPicker({
       ) : null}
       <div className="mt-5 max-w-sm">
         <label htmlFor="promo-code" className="mb-1 block text-sm font-medium">
-          Promo code
+          {t.picker.promoCode}
         </label>
         <input
           id="promo-code"
           type="text"
           maxLength={30}
-          placeholder="Enter a promo code"
+          placeholder={t.picker.promoPlaceholder}
           value={promoCode}
           onChange={(event) => {
             setPromoCode(event.target.value);
@@ -206,14 +219,17 @@ export function TicketPicker({
         />
         {promo ? (
           <p className="mt-1 text-sm text-zinc-600">
-            Code {promo.code} applied:{' '}
-            {promo.discount_type === 'percent'
-              ? `${promo.discount_value}%`
-              : formatPrice(promo.discount_value)}{' '}
-            off{' '}
-            {promo.ticket_type_ids === null
-              ? 'all tickets'
-              : promo.ticket_types.map((type) => type.name).join(', ')}
+            {fill(t.picker.promoApplied, {
+              code: promo.code,
+              discount:
+                promo.discount_type === 'percent'
+                  ? `${promo.discount_value}%`
+                  : formatPrice(promo.discount_value, locale),
+              tickets:
+                promo.ticket_type_ids === null
+                  ? t.picker.allTickets
+                  : promo.ticket_types.map((type) => type.name).join(', '),
+            })}
           </p>
         ) : null}
         {promoError ? (
@@ -223,23 +239,21 @@ export function TicketPicker({
         ) : null}
       </div>
       <div className="mt-5 flex flex-wrap items-center gap-4">
-        <p className="font-medium">Total: {formatPrice(total)}</p>
+        <p className="font-medium">
+          {fill(t.common.total, { amount: formatPrice(total, locale) })}
+        </p>
         <button
           type="button"
           disabled={pending || selectedCount === 0 || selectedCount > 10}
           onClick={() => void continueToOrder()}
           className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
         >
-          {pending
-            ? 'Creating order…'
-            : total === 0
-              ? 'Register'
-              : 'Continue to payment'}
+          {pending ? t.picker.creating : total === 0 ? t.picker.register : t.picker.continue}
         </button>
       </div>
       {selectedCount > 10 ? (
         <p role="alert" className="mt-3 text-sm text-red-700">
-          At most 10 tickets per order
+          {t.picker.tooMany}
         </p>
       ) : null}
       {error ? (

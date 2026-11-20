@@ -3,7 +3,9 @@
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
-import { ApiError, loginAccount, registerAccount } from '@/api';
+import { loginAccount, registerAccount } from '@/api';
+import { useI18n } from '@/i18n/client';
+import { errorText } from '@/i18n/errors';
 import { saveSession } from '@/session';
 
 const fieldClass =
@@ -11,6 +13,7 @@ const fieldClass =
 
 export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
   const router = useRouter();
+  const { t } = useI18n();
   const searchParams = useSearchParams();
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -43,7 +46,7 @@ export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
       router.push(next);
       router.refresh();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.');
+      setError(errorText(err, t));
     } finally {
       setPending(false);
     }
@@ -54,15 +57,15 @@ export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
       onSubmit={onSubmit}
       className="mx-auto w-full max-w-sm rounded-lg border border-zinc-200 bg-white p-6"
     >
-      <h1 className="text-xl font-semibold">{isRegister ? 'Create an account' : 'Log in'}</h1>
+      <h1 className="text-xl font-semibold">{isRegister ? t.auth.registerTitle : t.auth.logInTitle}</h1>
       {isRegister ? (
         <label className="mt-4 block text-sm font-medium">
-          Name
+          {t.auth.name}
           <input name="name" required autoComplete="name" className={fieldClass} />
         </label>
       ) : null}
       <label className="mt-4 block text-sm font-medium">
-        Email
+        {t.common.email}
         <input
           name="email"
           type="email"
@@ -72,7 +75,7 @@ export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
         />
       </label>
       <label className="mt-4 block text-sm font-medium">
-        Password
+        {t.auth.password}
         <input
           name="password"
           type="password"
@@ -91,20 +94,20 @@ export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
         disabled={pending}
         className="mt-5 w-full rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60"
       >
-        {pending ? 'Please wait…' : isRegister ? 'Create account' : 'Log in'}
+        {pending ? t.common.pleaseWait : isRegister ? t.auth.createAccount : t.auth.logIn}
       </button>
       <p className="mt-4 text-sm text-zinc-600">
         {isRegister ? (
           <Link href={loginHref} className="hover:text-zinc-900">
-            Already have an account? Log in
+            {t.auth.haveAccount}
           </Link>
         ) : (
           <span className="flex gap-4">
             <Link href={registerHref} className="hover:text-zinc-900">
-              Create an account
+              {t.auth.noAccount}
             </Link>
             <Link href="/forgot-password" className="hover:text-zinc-900">
-              Forgot password?
+              {t.auth.forgotPassword}
             </Link>
           </span>
         )}

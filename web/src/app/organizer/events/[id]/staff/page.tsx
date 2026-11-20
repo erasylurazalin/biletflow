@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useState, type FormEvent } from 'react';
 import { ApiError, assignStaff, listStaff, removeStaff, type StaffMember } from '@/api';
+import { useI18n } from '@/i18n/client';
+import { errorText } from '@/i18n/errors';
 import { clearSession, readToken } from '@/session';
 
 const fieldClass =
@@ -14,6 +16,7 @@ const buttonClass =
 function DoorStaff() {
   const { id: eventId } = useParams<{ id: string }>();
   const router = useRouter();
+  const { t } = useI18n();
   const [staff, setStaff] = useState<StaffMember[] | null>(null);
   const [email, setEmail] = useState('');
   const [pending, setPending] = useState<string | null>(null);
@@ -28,12 +31,12 @@ function DoorStaff() {
         return;
       }
       if (err instanceof ApiError && err.status === 403) {
-        setError("Only the event's organizer can do this");
+        setError(t.organizer.ownerOnly);
         return;
       }
-      setError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.');
+      setError(errorText(err, t));
     },
-    [router],
+    [router, t],
   );
 
   const refresh = useCallback(async () => {
@@ -103,11 +106,11 @@ function DoorStaff() {
   return (
     <div className="mx-auto max-w-2xl">
       <Link href={`/events/${eventId}`} className="text-sm text-zinc-500 hover:text-zinc-800">
-        ← Event
+        {t.organizer.back}
       </Link>
-      <h1 className="mt-4 text-2xl font-semibold">Door staff</h1>
+      <h1 className="mt-4 text-2xl font-semibold">{t.staff.title}</h1>
       <p className="mt-2 text-sm text-zinc-600">
-        People on this list can scan tickets for this event in the BiletFlow check-in app.
+        {t.staff.intro}
       </p>
 
       {error ? (
@@ -116,7 +119,7 @@ function DoorStaff() {
         </p>
       ) : null}
 
-      {loading ? <p className="mt-6 text-sm text-zinc-600">Loading staff…</p> : null}
+      {loading ? <p className="mt-6 text-sm text-zinc-600">{t.staff.loading}</p> : null}
       {!loading && !staff && error ? (
         <button
           type="button"
@@ -124,16 +127,16 @@ function DoorStaff() {
           onClick={() => void refresh()}
           className={`${buttonClass} mt-4`}
         >
-          {pending === 'refresh' ? 'Loading…' : 'Try again'}
+          {pending === 'refresh' ? t.common.loading : t.organizer.tryAgain}
         </button>
       ) : null}
 
       {staff ? (
         <div className="mt-6 space-y-6">
           <section className="rounded-lg border border-zinc-200 bg-white p-5">
-            <h2 className="font-medium">Current staff</h2>
+            <h2 className="font-medium">{t.staff.current}</h2>
             {staff.length === 0 ? (
-              <p className="mt-3 text-sm text-zinc-600">Nobody is assigned yet.</p>
+              <p className="mt-3 text-sm text-zinc-600">{t.staff.nobody}</p>
             ) : (
               <ul className="mt-3 divide-y divide-zinc-200">
                 {staff.map((member) => (
@@ -152,7 +155,7 @@ function DoorStaff() {
                       }
                       className={buttonClass}
                     >
-                      {pending === `remove:${member.id}` ? 'Removing…' : 'Remove'}
+                      {pending === `remove:${member.id}` ? t.staff.removing : t.staff.remove}
                     </button>
                   </li>
                 ))}
@@ -161,10 +164,10 @@ function DoorStaff() {
           </section>
 
           <section className="rounded-lg border border-zinc-200 bg-white p-5">
-            <h2 className="font-medium">Add door staff</h2>
+            <h2 className="font-medium">{t.staff.addTitle}</h2>
             <form onSubmit={(event) => void submitStaff(event)} className="mt-3 space-y-3">
               <label className="block text-sm font-medium text-zinc-800">
-                Email
+                {t.common.email}
                 <input
                   type="email"
                   required
@@ -175,7 +178,7 @@ function DoorStaff() {
                 />
               </label>
               <button type="submit" disabled={pending !== null} className={buttonClass}>
-                {pending === 'add' ? 'Adding…' : 'Add'}
+                {pending === 'add' ? t.staff.adding : t.staff.add}
               </button>
             </form>
           </section>
@@ -186,8 +189,9 @@ function DoorStaff() {
 }
 
 export default function StaffPage() {
+  const { t } = useI18n();
   return (
-    <Suspense fallback={<p className="text-sm text-zinc-600">Loading staff…</p>}>
+    <Suspense fallback={<p className="text-sm text-zinc-600">{t.staff.loading}</p>}>
       <DoorStaff />
     </Suspense>
   );
