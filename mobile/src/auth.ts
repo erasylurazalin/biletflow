@@ -1,9 +1,8 @@
 import * as Store from "expo-secure-store";
 
 const TOKEN_KEY = "user_auth_token";
-let logged_in : boolean|null = null;
 
-export async function setAuth(token : string) : Promise<void> {
+export async function setAuth(token: string): Promise<void> {
     try {
         await Store.setItemAsync(TOKEN_KEY, token);
     } catch (error) {
@@ -11,16 +10,16 @@ export async function setAuth(token : string) : Promise<void> {
     }
 }
 
-export async function getAuth() : Promise<string|null>{
+export async function getAuth(): Promise<string | null> {
     try {
         return await Store.getItemAsync(TOKEN_KEY);
     } catch (error) {
-        console.error("Error setching the auth token:", error);
+        console.error("Error fetching the auth token:", error);
         return null;
     }
-}    
+}
 
-export async function removeAuth() {
+export async function removeAuth(): Promise<void> {
     try {
         await Store.deleteItemAsync(TOKEN_KEY);
     } catch (error) {
@@ -28,11 +27,7 @@ export async function removeAuth() {
     }
 }
 
-export async function isLoggedIn() {
-    if (logged_in !== null) return logged_in;
-    
-    logged_in = await getAuth() !== null;
-    return logged_in;
+// Always reads the stored token: it can be set or cleared while the app runs.
+export async function isLoggedIn(): Promise<boolean> {
+    return (await getAuth()) !== null;
 }
-
-
