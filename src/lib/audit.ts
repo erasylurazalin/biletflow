@@ -38,6 +38,7 @@ export const AUDIT_ACTIONS = [
   'event.duplicated',
   'event.suspended',
   'event.unsuspended',
+  'event_report.dismissed',
   'ticket_type.created',
   'ticket_type.updated',
   'ticket_type.deleted',
@@ -57,6 +58,7 @@ export const AUDIT_ACTIONS = [
   'support_case.opened',
   'support_case.status_changed',
   'support_case.assigned',
+  'platform_settings.updated',
   'user.suspended',
   'user.unsuspended',
 ] as const;
@@ -72,7 +74,9 @@ export type AuditEntityType =
   | 'order'
   | 'ticket'
   | 'promo_code'
-  | 'support_case';
+  | 'support_case'
+  | 'event_report'
+  | 'platform_settings';
 
 export interface AuditEntry {
   /** Who did it. null only for the system itself, never for a logged-in request. */

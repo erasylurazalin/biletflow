@@ -77,6 +77,12 @@ Creating an organizer profile (below) is what turns a user into an `organizer`. 
 lives in the token, so after it changes the client uses the new token: the one
 `POST /api/me/organizer-profile` returns, or one from a fresh login.
 
+A suspended account cannot log in: `POST /api/auth/login` answers
+`403 ACCOUNT_SUSPENDED` even when the password is correct. The check happens after the
+password check, so only somebody who knows the password learns that the account is
+suspended. An already-issued token keeps working until it expires (docs/decisions.md,
+decision 15).
+
 ---
 
 ## Email (simulated)
@@ -174,6 +180,13 @@ The caller's own events in every status (draft, published, cancelled), newest fi
 Needs a token; a user who is not an organizer gets an empty list. `limit` defaults to
 20 and caps at 100, `offset` defaults to 0, as on every list endpoint.
 
+Each item carries a computed `phase`: `draft` while the event is a draft, `cancelled`
+once it is cancelled, and otherwise `upcoming` (published, starts in the future),
+`active` (published, now is between start and end) or `completed` (published, already
+ended). The database computes it on read, so it is never stale. `?phase=` accepts one of
+those five values and returns only events in that phase; anything else is
+`400 VALIDATION_ERROR`.
+
 Each item is the list shape from `GET /api/events` plus three counts computed from the
 database, never stored:
 
@@ -192,6 +205,7 @@ database, never stored:
   "starts_at": "2026-11-14T18:00:00Z",
   "ends_at": "2026-11-14T21:00:00Z",
   "status": "draft" | "published" | "cancelled",
+  "phase": "draft" | "cancelled" | "upcoming" | "active" | "completed",
   "cover_image_url": "https://..." | null,
   "organizer": { "id": "uuid", "name": "..." },
   "capacity": 100,
@@ -222,6 +236,9 @@ POST   /api/events/:id/cancel         draft or published -> cancelled
   cancelled events cannot be published again (`409 CONFLICT`).
 - Cancelling an already cancelled event returns `409 CONFLICT`. Cancellation also cancels
   every valid ticket and every pending order. Checked-in tickets and paid orders are unchanged.
+- Creating an event writes an `event.created` audit entry in the same transaction, so
+  every event timeline starts with its creation. Publishing and cancelling write
+  `event.published` and `event.cancelled`.
 
 ```json
 "event": {
@@ -272,6 +289,77 @@ defaults to 20 and caps at 100, `offset` defaults to 0. `q` filters on the title
 The array key is the plural of what is listed (`events`, `orders`, `tickets`), so a
 client always reads `body.events` and never a bare array. This is our pick, not a
 standard: agreed in the group chat, and implemented in `GET /api/events`.
+
+---
+
+## Event history and duplication
+
+```
+GET  /api/events/:id/timeline?from&to&action&limit&offset  -> { entries, actions, limit, offset }
+POST /api/events/:id/duplicate                             -> 201 { event }
+```
+
+### Timeline
+
+The event's activity timeline from the append-only audit log, newest first. It works
+for every status, including cancelled and suspended events, because history is needed
+after the event is over.
+
+Who may read it: the event's organizer, a user in that event's staff list, and a
+`platform_admin`. Everybody else, and an unknown event id, gets
+`404 EVENT_NOT_FOUND` (never 403, so the endpoint cannot be used to probe ids). A
+request without a token is `401`.
+
+`from` and `to` are plain ISO dates (`2026-10-20`). Both ends are inclusive, and a plain
+date means that whole day in Kazakhstan time (`Asia/Almaty`), the same zone analytics
+use. A date-time with an offset is also accepted and means that exact instant. `action`
+must be one of the names in "Audit log" below; anything else is `400 VALIDATION_ERROR`.
+`limit` defaults to 20 and caps at 100, `offset` defaults to 0.
+
+```json
+{
+  "entries": [
+    {
+      "id": "uuid",
+      "created_at": "2026-10-20T09:00:00Z",
+      "action": "event.published",
+      "entity_type": "event",
+      "entity_id": "uuid",
+      "description": "Published the event",
+      "actor": { "id": "uuid", "name": "Aigerim S." }
+    }
+  ],
+  "actions": ["event.cancelled", "event.created", "event.published"],
+  "limit": 20,
+  "offset": 0
+}
+```
+
+`actor` is `null` for a system action. `actions` lists the distinct actions that exist
+for this event across its whole history, so the web filter can offer only those; it is
+not narrowed by the current date range or action filter.
+
+### Duplicate
+
+Only the event's organizer can duplicate it. Other organizers and unknown ids get
+`404 EVENT_NOT_FOUND`. Any status works, including cancelled, completed and suspended
+events.
+
+The new event is a `draft` and never suspended. It copies the title, description,
+`venue_name`, `venue_address`, `cover_image_url`, `refund_policy`, the start and end
+times, and every ticket type (name, price, currency, `quantity_total`, sales window,
+`is_hidden`). The start and end are moved forward by whole weeks until the start is in
+the future, keeping the weekday and time of day; an event already in the future keeps
+its dates. Ticket type sales windows move by the same number of weeks so the copy can
+actually go on sale. The rule is decision 16 in `docs/decisions.md`.
+
+Nothing transactional or historical is copied: no orders, order items, tickets,
+payments, refunds, check-ins, promo campaigns or redemptions, staff assignments,
+paid-sales activation, suspension or support cases.
+
+The response is the same event shape as `GET /api/events/:id/manage`, with
+`paid_sales_active: false` and empty history. The copy's timeline starts with
+`event.created`, then `event.duplicated`, whose description names the source event id.
 
 ---
 
@@ -335,8 +423,210 @@ puts the event back exactly as it was. Suspending and lifting each write an audi
 ```
 
 `suspended_at` is `null` when `suspended` is `false`. This is only the admin's answer:
-the full event object does not carry the flag yet. Searching events, suspending users,
-reported events, platform settings and the admin pages are #63.
+the full event object does not carry the flag yet.
+
+---
+
+## Admin: users
+
+```
+GET  /api/admin/users?q=&limit=&offset             -> { users, limit, offset }
+POST /api/admin/users/:id/suspend                  -> { user }
+POST /api/admin/users/:id/unsuspend                -> { user }
+```
+
+All three are for `platform_admin` only: anybody else logged in gets `403 FORBIDDEN`,
+and no token is `401`. `q` searches the email or the name, case-insensitively, and
+matches anywhere in the text. `limit` defaults to 20 and caps at 100, `offset` defaults
+to 0, as on every list endpoint.
+
+```json
+"user": {
+  "id": "uuid",
+  "email": "aidos@example.kz",
+  "name": "Aidos",
+  "role": "attendee" | "organizer" | "event_admin" | "platform_admin",
+  "email_verified": true,
+  "suspended": false,
+  "suspended_at": "..." | null,
+  "suspended_by": "uuid" | null,
+  "created_at": "..."
+}
+```
+
+Suspension is a flag on the account, not a deletion and not a role change. Lifting it
+puts the account back exactly as it was. `user.suspended` and `user.unsuspended` audit
+entries are written with the transaction. An unknown user is `404 USER_NOT_FOUND`.
+Suspending yourself, suspending another `platform_admin`, suspending an already
+suspended user, or unsuspending a user who is not suspended is `409 CONFLICT`.
+
+A suspended user cannot log in (see "Auth"). An already-issued token keeps working until
+it expires, because `requireAuth` does not read the database (docs/decisions.md,
+decision 15).
+
+---
+
+## Admin: searching events
+
+```
+GET /api/admin/events?q=&status=&limit=&offset     -> { events, limit, offset }
+```
+
+For `platform_admin` only. Every event in every status, newest first. `q` searches the
+title, the organizer's name or the organizer's email, case-insensitively. `status` is
+optional and one of `draft`, `published`, `cancelled`. `limit` and `offset` follow the
+usual list rules.
+
+```json
+"event": {
+  "id": "uuid",
+  "title": "Astana Tech Meetup",
+  "status": "published",
+  "suspended": false,
+  "suspended_at": null,
+  "starts_at": "...",
+  "ends_at": "...",
+  "organizer": {
+    "id": "uuid",
+    "name": "Astana Tech Community",
+    "email": "organizer@example.kz"
+  },
+  "open_reports": 2
+}
+```
+
+`open_reports` counts `event_reports` rows in status `open`, computed on read. A
+suspended event is included here: this is the moderation view, not the public list.
+Suspending and lifting use the endpoints in "Admin: suspending an event".
+
+---
+
+## Reported events
+
+A logged-in user can report a published event (SRS 4.12). A platform admin reviews open
+reports and either dismisses a report or suspends the event.
+
+```
+POST /api/events/:id/report        { reason }                    -> 201 { report }
+GET  /api/admin/reports?status=open&limit=&offset                -> { reports, limit, offset }
+POST /api/admin/reports/:id/resolve { action: "dismiss" | "suspend" } -> { report }
+```
+
+`POST /api/events/:id/report` needs a token but no particular role. The event must be
+published and not suspended; anything else is `404 EVENT_NOT_FOUND`, the same answer as
+the public detail. `reason` is required, trimmed, and 1 to 1000 characters, otherwise
+`400 VALIDATION_ERROR`. One person can have one open report per event: a second while
+the first is still open is `409 CONFLICT`. Once a report is dismissed or actioned, that
+person can report the event again.
+
+The two admin endpoints are for `platform_admin` only. `status` is `open`, `dismissed`
+or `actioned` and defaults to `open`, so the moderation queue is the default. Reports
+are oldest first.
+
+```json
+"report": {
+  "id": "uuid",
+  "event": {
+    "id": "uuid",
+    "title": "Astana Tech Meetup",
+    "status": "published",
+    "suspended": false
+  },
+  "reported_by": { "id": "uuid", "name": "Aidos", "email": "aidos@example.kz" },
+  "reason": "The description looks like spam",
+  "status": "open" | "dismissed" | "actioned",
+  "created_at": "...",
+  "reviewed_by": "uuid" | null,
+  "reviewed_at": "..." | null
+}
+```
+
+- `dismiss` marks that one report `dismissed` and writes `event_report.dismissed`.
+- `suspend` suspends the event through the existing suspension logic, including its lock
+  and `event.suspended` audit entry, then marks every open report on that event
+  `actioned`. If the event is already suspended, the reports are still actioned and no
+  second suspension entry is written.
+- An unknown report is `404 REPORT_NOT_FOUND`. Resolving a report that is not open is
+  `409 CONFLICT`.
+
+---
+
+## Admin: platform settings
+
+```
+GET   /api/admin/settings                  -> { settings }
+PATCH /api/admin/settings { activation_fee } -> { settings }
+```
+
+For `platform_admin` only. There is one platform settings row.
+
+```json
+"settings": {
+  "activation_fee": 500000,
+  "currency": "KZT",
+  "updated_at": "...",
+  "updated_by": "uuid" | null
+}
+```
+
+`activation_fee` is the paid-sales activation fee in tiyn, a whole number from 0 up. The
+default is `500000` (5,000 KZT). A change applies to the next fee payment; an
+already-paid fee keeps the amount it was paid with and `GET /api/events/:id/paid-sales`
+shows both the current amount and that payment. `PATCH` writes a
+`platform_settings.updated` audit entry. A missing, negative, non-integer or out of range
+value is `400 VALIDATION_ERROR`.
+
+---
+
+## Admin: orders and CSV exports
+
+```
+GET /api/admin/orders?q=&status=&limit=&offset        -> { orders, limit, offset }
+GET /api/admin/export/orders.csv?q=&status=            -> text/csv
+GET /api/admin/export/refunds.csv?q=                   -> text/csv
+```
+
+For `platform_admin` only. Orders are newest first and include every status. `q` matches
+the order id or the buyer's email, case-insensitively. `status` is optional and one of
+`pending`, `paid`, `cancelled`, `refunded`; an expired pending order reads as
+`cancelled`, exactly like `GET /api/orders`. The same `q` and `status` narrow a CSV
+export, so an admin can download the slice they are looking at.
+
+```json
+"order": {
+  "id": "uuid",
+  "status": "pending" | "paid" | "cancelled" | "refunded",
+  "buyer": { "id": "uuid", "name": "...", "email": "..." },
+  "event": { "id": "uuid", "title": "..." },
+  "subtotal": 1000000,
+  "discount": 0,
+  "processing_fee": 30000,
+  "total": 1030000,
+  "created_at": "...",
+  "payment": { ... } | null,
+  "refund": { ... } | null,
+  "failed_payment_attempts": 1,
+  "last_payment_failed_at": "..." | null
+}
+```
+
+`payment` and `refund` use the objects from "Orders". A refund appears both through
+`refund` and in the refunds CSV. A failed simulated payment leaves no `payments` row, so
+`failed_payment_attempts` and `last_payment_failed_at` are computed from the
+`order.payment_failed` audit entries for that order. Successful payments are the
+`payment` object, and a free order has none.
+
+Both CSV endpoints return `Content-Type: text/csv; charset=utf-8` with an attachment
+filename and a header row. Amounts are in tenge with exactly two decimals, timestamps
+are ISO 8601 UTC, and any value containing a comma, a quote or a newline is quoted with
+embedded quotes doubled. The order export has one row per order. The refund export has
+one row per refund.
+
+Order columns:
+`order_id,status,buyer_name,buyer_email,event_id,event_title,subtotal_kzt,discount_kzt,processing_fee_kzt,total_kzt,created_at,payment_method,payment_amount_kzt,refunded_at,refund_amount_kzt,failed_payment_attempts,last_payment_failed_at`.
+
+Refund columns:
+`refund_id,order_id,buyer_name,buyer_email,event_title,amount_kzt,currency,method,is_demonstration,refunded_at,refunded_by`.
 
 ---
 
@@ -635,6 +925,8 @@ The web event page calls `GET /api/promo/:token` when it is opened with
 `?promo=<token>`, pre-fills the promo field with the code and shows which types are
 covered, hidden ones included: `ticket_types` lists the covered types with name, price
 and availability so they can be ordered like any other type once the code is applied.
+The list always belongs to the campaign's own event, whether the campaign covers every
+type or only the `ticket_type_ids` it lists.
 
 ### Redeeming a code
 
@@ -693,7 +985,7 @@ POST /api/events/:id/paid-sales/activate         { }                  -> { paid_
     "terms_accepted": false         // POST .../terms
   },
   "activation_fee": {
-    "amount": 500000,               // 5,000 KZT
+    "amount": 500000,               // current platform setting, 5,000 KZT by default
     "currency": "KZT",
     "payment": { ... } | null       // the "payment" object from Orders
   },
@@ -708,8 +1000,11 @@ three `POST`s are `409 CONFLICT`.
 
 - Identity and the payout account belong to the organizer, so they are done once on the
   organizer profile and count for every event. The fee and the terms are per event.
-- `activation-fee` records a **simulated payment** of the fee. The amount is 5,000 KZT
-  (SRS 3.3 leaves it open; `docs/decisions.md`). Paying it a second time is
+- `activation-fee` records a **simulated payment** of the fee. The amount comes from
+  `platform_settings.activation_fee`, which a platform admin can change (see
+  "Admin: platform settings"); the default is 5,000 KZT and the migration default is
+  `500000` tiyn (SRS 3.3 leaves it open; `docs/decisions.md`). A change applies to the
+  next fee payment, and an already-paid fee keeps its amount. Paying it a second time is
   `409 CONFLICT`.
 - `terms` needs `{ "accepted": true }`, anything else is `400`. Accepting again changes
   nothing.
@@ -1139,11 +1434,11 @@ appear on the event timeline.
 
 ## Audit log
 
-Not an endpoint yet. Every organizer, admin, payment and refund action writes one entry
-(SRS 4.9, 4.16, 7), and the event timeline (#62) will read them. Write entries with
-`recordAudit(client, entry)` from `src/lib/audit.ts`, using the transaction client, so
-the entry and the change commit or roll back together. Entries can't be edited or
-deleted: the table refuses both.
+Every organizer, admin, payment and refund action writes one entry (SRS 4.9, 4.16, 7).
+Read them for one event with `GET /api/events/:id/timeline` ("Event history and
+duplication" above). Write entries with `recordAudit(client, entry)` from
+`src/lib/audit.ts`, using the transaction client, so the entry and the change commit or
+roll back together. Entries can't be edited or deleted: the table refuses both.
 
 An entry has a timestamp, the acting user (null for the system), an action, the entity
 it's about, the event when there is one, and a short English description like
@@ -1162,6 +1457,7 @@ Use these action names and no others. A new one goes into this table and into
 | `event.duplicated`                    | event             | a past event is copied into a new draft (entity is the new one) |
 | `event.suspended`                     | event             | a platform admin suspends the event                             |
 | `event.unsuspended`                   | event             | a platform admin lifts the suspension                           |
+| `event_report.dismissed`              | event_report      | a platform admin dismisses a reported event                     |
 | `ticket_type.created`                 | ticket_type       | a ticket type is added                                          |
 | `ticket_type.updated`                 | ticket_type       | price, capacity or sale dates change                            |
 | `ticket_type.deleted`                 | ticket_type       | a ticket type is removed                                        |
@@ -1181,6 +1477,7 @@ Use these action names and no others. A new one goes into this table and into
 | `support_case.opened`                 | support_case      | a user opens a support case                                     |
 | `support_case.status_changed`         | support_case      | a responder changes a support case status                       |
 | `support_case.assigned`               | support_case      | a responder assigns or unassigns a support case                 |
+| `platform_settings.updated`           | platform_settings | a platform admin changes the activation fee                     |
 | `user.suspended`                      | user              | a platform admin suspends an account (no event)                 |
 | `user.unsuspended`                    | user              | a platform admin lifts it                                       |
 

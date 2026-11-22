@@ -32,9 +32,10 @@ import { requireAuth } from '../middleware/auth';
 // must not demand a token.
 export const paidSalesRouter = Router();
 
-// The Paid Sales Activation Fee in tiyn: 5,000 KZT. SRS 3.3 leaves the amount open, so
-// this is our pick (docs/decisions.md). Platform admins configuring it comes later.
-export const ACTIVATION_FEE = 500000;
+// The activation fee used to be this constant. It is now a platform setting
+// (migration 012) whose migration default is 500000 tiyn, 5,000 KZT. Every read joins
+// platform_settings in the same query, so a change applies to the next fee payment
+// without a restart. An already-paid fee keeps the amount it was paid with.
 
 // Postgres error code for a unique violation: the fee for this event is already paid.
 const PG_UNIQUE_VIOLATION = '23505';
@@ -50,6 +51,7 @@ interface PaidSalesRow extends PaymentColumns {
   payout_account: boolean;
   terms_accepted_at: Date | null;
   activated_at: Date | null;
+  activation_fee: number;
 }
 
 // Missing organizer profile or activation row reads as "not done": a NULL from a LEFT
@@ -63,11 +65,13 @@ const PAID_SALES_SELECT = `SELECT e.id AS event_id,
          op.payout_iban IS NOT NULL AS payout_account,
          psa.terms_accepted_at,
          psa.activated_at,
+         ps.activation_fee,
          ${PAYMENT_COLUMNS}
     FROM events e
     LEFT JOIN organizer_profiles op ON op.user_id = e.organizer_id
     LEFT JOIN paid_sales_activations psa ON psa.event_id = e.id
     LEFT JOIN payments pay ON pay.event_id = e.id AND pay.purpose = 'activation_fee'
+    CROSS JOIN platform_settings ps
    WHERE e.id = $1`;
 
 function checklistOf(row: PaidSalesRow) {
@@ -96,7 +100,7 @@ function toPaidSales(row: PaidSalesRow) {
     status: row.activated_at === null ? 'inactive' : 'active',
     checklist: checklistOf(row),
     activation_fee: {
-      amount: ACTIVATION_FEE,
+      amount: row.activation_fee,
       currency: 'KZT',
       payment: toPayment(row),
     },
@@ -177,7 +181,7 @@ paidSalesRouter.post(
             `INSERT INTO payments (purpose, event_id, paid_by, amount, method)
              VALUES ('activation_fee', $1, $2, $3, 'simulated')
              RETURNING id`,
-            [eventId, userId, ACTIVATION_FEE],
+            [eventId, userId, before.activation_fee],
           );
           payment = result.rows[0]!;
         } catch (err) {
@@ -190,13 +194,14 @@ paidSalesRouter.post(
           throw err;
         }
 
+        const feeKzt = Number((before.activation_fee / 100).toFixed(2));
         await recordAudit(client, {
           actorId: userId,
           action: 'paid_sales.fee_paid',
           entityType: 'payment',
           entityId: payment.id,
           eventId,
-          description: 'Paid the simulated paid-sales activation fee of 5000 KZT',
+          description: `Paid the simulated paid-sales activation fee of ${feeKzt} KZT`,
         });
         return loadOwnPaidSales(client, eventId, userId);
       });

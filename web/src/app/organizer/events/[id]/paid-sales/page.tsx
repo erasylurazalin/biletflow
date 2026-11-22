@@ -167,7 +167,10 @@ function PaidSalesChecklist() {
 
   return (
     <div className="mx-auto max-w-2xl">
-      <Link href={`/events/${eventId}`} className="text-sm text-zinc-500 hover:text-zinc-800">
+      <Link
+        href={`/organizer/events/${eventId}`}
+        className="text-sm text-zinc-500 hover:text-zinc-800"
+      >
         {t.organizer.back}
       </Link>
       <h1 className="mt-4 text-2xl font-semibold">{t.paidSales.title}</h1>
@@ -199,7 +202,10 @@ function PaidSalesChecklist() {
             ) : (
               <p>
                 {paidTypeBefore}
-                <Link href={`/events/${eventId}`} className="font-medium text-zinc-900 underline">
+                <Link
+                  href={`/organizer/events/${eventId}`}
+                  className="font-medium text-zinc-900 underline"
+                >
                   {t.paidSales.paidTypeLink}
                 </Link>
                 {paidTypeAfter}

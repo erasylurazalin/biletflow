@@ -5,6 +5,7 @@ import { ApiUnavailable } from '@/api-unavailable';
 import { errorText } from '@/i18n/errors';
 import { fill } from '@/i18n/format';
 import { getI18n } from '@/i18n/server';
+import { ReportEventButton } from '@/report-event-button';
 import { SupportHelpLink } from '@/support-help-link';
 import { TicketPicker } from '@/ticket-picker';
 
@@ -79,6 +80,7 @@ export default async function EventPage({
         </section>
       ) : null}
       <p className="mt-2 text-sm text-zinc-500">{fill(t.event.organizer, { name: event.organizer.name })}</p>
+      <ReportEventButton eventId={event.id} />
       <div className="mt-2">
         <SupportHelpLink href={`/support/new?event=${event.id}`} />
       </div>

@@ -14,6 +14,7 @@ import { analyticsRouter } from './routes/analytics';
 import { authRouter } from './routes/auth';
 import { checkInRouter } from './routes/check-in';
 import { devRouter } from './routes/dev';
+import { eventHistoryRouter } from './routes/event-history';
 import { eventsRouter } from './routes/events';
 import { meRouter } from './routes/me';
 import { organizerOrdersRouter } from './routes/organizer-orders';
@@ -38,6 +39,7 @@ export function createApp() {
 
   app.use('/api/auth', authRouter);
   app.use('/api/events', eventsRouter);
+  app.use('/api', eventHistoryRouter);
   app.use('/api/me', meRouter);
   app.use('/api/orders', ordersRouter);
   app.use('/api/tickets', ticketsRouter);
