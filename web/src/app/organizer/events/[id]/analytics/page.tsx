@@ -116,7 +116,7 @@ function EventAnalyticsPage() {
   return (
     <div className="mx-auto max-w-3xl">
       <div className="flex flex-wrap items-center gap-4 text-sm">
-        <Link href={`/events/${eventId}`} className="text-zinc-500 hover:text-zinc-800">
+        <Link href={`/organizer/events/${eventId}`} className="text-zinc-500 hover:text-zinc-800">
           {t.organizer.back}
         </Link>
         <Link

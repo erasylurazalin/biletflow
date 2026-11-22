@@ -635,6 +635,8 @@ The web event page calls `GET /api/promo/:token` when it is opened with
 `?promo=<token>`, pre-fills the promo field with the code and shows which types are
 covered, hidden ones included: `ticket_types` lists the covered types with name, price
 and availability so they can be ordered like any other type once the code is applied.
+The list always belongs to the campaign's own event, whether the campaign covers every
+type or only the `ticket_type_ids` it lists.
 
 ### Redeeming a code
 

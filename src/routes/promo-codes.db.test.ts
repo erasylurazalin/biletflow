@@ -350,6 +350,31 @@ describe.skipIf(!TEST_DATABASE_URL)('promo codes against a real database', () =>
     expect(wrongCode.status).toBe(400);
   });
 
+  it('serves a campaign link limited to one hidden ticket type', async () => {
+    const campaign = await createCampaign({
+      name: 'Hidden link',
+      discount_type: 'percent',
+      discount_value: 10,
+      code: `HIDLNK${RUN}`,
+      ticket_type_ids: [typeIdH],
+    });
+
+    const promo = await request(app).get(`/api/promo/${campaign.token}`);
+    expect(promo.status).toBe(200);
+    expect(promo.body.promo).toMatchObject({
+      campaign_name: 'Hidden link',
+      ticket_type_ids: [typeIdH],
+    });
+    expect(promo.body.promo.ticket_types).toEqual([
+      {
+        id: typeIdH,
+        name: 'Hidden',
+        price: 300000,
+        quantity_available: expect.any(Number),
+      },
+    ]);
+  });
+
   it('refuses invalid, foreign, disabled, early, expired and inapplicable codes', async () => {
     // A code of another event of the same organizer.
     const otherEvent = await pool.query<{ id: string }>(
