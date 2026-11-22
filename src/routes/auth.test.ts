@@ -138,7 +138,11 @@ describe('POST /api/auth/register', () => {
 });
 
 describe('POST /api/auth/login', () => {
-  const storedRow = { ...userRow, password_hash: bcrypt.hashSync('correct-horse', 4) };
+  const storedRow = {
+    ...userRow,
+    password_hash: bcrypt.hashSync('correct-horse', 4),
+    suspended_at: null,
+  };
 
   it('returns the user and a token for the right password', async () => {
     query.mockResolvedValueOnce(rows([storedRow]));
@@ -164,6 +168,20 @@ describe('POST /api/auth/login', () => {
     expect(res.body).toEqual({
       error: { code: 'UNAUTHORIZED', message: 'Email or password is incorrect' },
     });
+    expect(res.body.token).toBeUndefined();
+  });
+
+  it('returns 403 ACCOUNT_SUSPENDED for a suspended account with the right password', async () => {
+    query.mockResolvedValueOnce(
+      rows([{ ...storedRow, suspended_at: new Date('2026-10-25T12:00:00.000Z') }]),
+    );
+
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'aidos@example.kz', password: 'correct-horse' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('ACCOUNT_SUSPENDED');
     expect(res.body.token).toBeUndefined();
   });
 

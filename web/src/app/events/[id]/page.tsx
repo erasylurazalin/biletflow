@@ -5,6 +5,7 @@ import { ApiUnavailable } from '@/api-unavailable';
 import { errorText } from '@/i18n/errors';
 import { fill } from '@/i18n/format';
 import { getI18n } from '@/i18n/server';
+import { ReportEventButton } from '@/report-event-button';
 import { TicketPicker } from '@/ticket-picker';
 
 export const dynamic = 'force-dynamic';
@@ -78,6 +79,7 @@ export default async function EventPage({
         </section>
       ) : null}
       <p className="mt-2 text-sm text-zinc-500">{fill(t.event.organizer, { name: event.organizer.name })}</p>
+      <ReportEventButton eventId={event.id} />
 
       <h2 className="mt-8 mb-3 text-xl font-medium">{t.event.tickets}</h2>
       {event.ticket_types.length === 0 && !promo ? (

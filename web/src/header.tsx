@@ -70,6 +70,11 @@ export function Header() {
                 {t.header.myOrders}
               </Link>
               <span className="font-medium">{user.name}</span>
+              {user.role === 'platform_admin' ? (
+                <Link href="/admin" className="font-medium text-zinc-800 hover:text-zinc-950">
+                  {t.admin.link}
+                </Link>
+              ) : null}
               {user.role === 'organizer' ? (
                 <>
                   <Link href="/organizer/events" className="text-zinc-600 hover:text-zinc-900">
