@@ -174,6 +174,13 @@ The caller's own events in every status (draft, published, cancelled), newest fi
 Needs a token; a user who is not an organizer gets an empty list. `limit` defaults to
 20 and caps at 100, `offset` defaults to 0, as on every list endpoint.
 
+Each item carries a computed `phase`: `draft` while the event is a draft, `cancelled`
+once it is cancelled, and otherwise `upcoming` (published, starts in the future),
+`active` (published, now is between start and end) or `completed` (published, already
+ended). The database computes it on read, so it is never stale. `?phase=` accepts one of
+those five values and returns only events in that phase; anything else is
+`400 VALIDATION_ERROR`.
+
 Each item is the list shape from `GET /api/events` plus three counts computed from the
 database, never stored:
 
@@ -192,6 +199,7 @@ database, never stored:
   "starts_at": "2026-11-14T18:00:00Z",
   "ends_at": "2026-11-14T21:00:00Z",
   "status": "draft" | "published" | "cancelled",
+  "phase": "draft" | "cancelled" | "upcoming" | "active" | "completed",
   "cover_image_url": "https://..." | null,
   "organizer": { "id": "uuid", "name": "..." },
   "capacity": 100,
@@ -222,6 +230,9 @@ POST   /api/events/:id/cancel         draft or published -> cancelled
   cancelled events cannot be published again (`409 CONFLICT`).
 - Cancelling an already cancelled event returns `409 CONFLICT`. Cancellation also cancels
   every valid ticket and every pending order. Checked-in tickets and paid orders are unchanged.
+- Creating an event writes an `event.created` audit entry in the same transaction, so
+  every event timeline starts with its creation. Publishing and cancelling write
+  `event.published` and `event.cancelled`.
 
 ```json
 "event": {
@@ -272,6 +283,77 @@ defaults to 20 and caps at 100, `offset` defaults to 0. `q` filters on the title
 The array key is the plural of what is listed (`events`, `orders`, `tickets`), so a
 client always reads `body.events` and never a bare array. This is our pick, not a
 standard: agreed in the group chat, and implemented in `GET /api/events`.
+
+---
+
+## Event history and duplication
+
+```
+GET  /api/events/:id/timeline?from&to&action&limit&offset  -> { entries, actions, limit, offset }
+POST /api/events/:id/duplicate                             -> 201 { event }
+```
+
+### Timeline
+
+The event's activity timeline from the append-only audit log, newest first. It works
+for every status, including cancelled and suspended events, because history is needed
+after the event is over.
+
+Who may read it: the event's organizer, a user in that event's staff list, and a
+`platform_admin`. Everybody else, and an unknown event id, gets
+`404 EVENT_NOT_FOUND` (never 403, so the endpoint cannot be used to probe ids). A
+request without a token is `401`.
+
+`from` and `to` are plain ISO dates (`2026-10-20`). Both ends are inclusive, and a plain
+date means that whole day in Kazakhstan time (`Asia/Almaty`), the same zone analytics
+use. A date-time with an offset is also accepted and means that exact instant. `action`
+must be one of the names in "Audit log" below; anything else is `400 VALIDATION_ERROR`.
+`limit` defaults to 20 and caps at 100, `offset` defaults to 0.
+
+```json
+{
+  "entries": [
+    {
+      "id": "uuid",
+      "created_at": "2026-10-20T09:00:00Z",
+      "action": "event.published",
+      "entity_type": "event",
+      "entity_id": "uuid",
+      "description": "Published the event",
+      "actor": { "id": "uuid", "name": "Aigerim S." }
+    }
+  ],
+  "actions": ["event.cancelled", "event.created", "event.published"],
+  "limit": 20,
+  "offset": 0
+}
+```
+
+`actor` is `null` for a system action. `actions` lists the distinct actions that exist
+for this event across its whole history, so the web filter can offer only those; it is
+not narrowed by the current date range or action filter.
+
+### Duplicate
+
+Only the event's organizer can duplicate it. Other organizers and unknown ids get
+`404 EVENT_NOT_FOUND`. Any status works, including cancelled, completed and suspended
+events.
+
+The new event is a `draft` and never suspended. It copies the title, description,
+`venue_name`, `venue_address`, `cover_image_url`, `refund_policy`, the start and end
+times, and every ticket type (name, price, currency, `quantity_total`, sales window,
+`is_hidden`). The start and end are moved forward by whole weeks until the start is in
+the future, keeping the weekday and time of day; an event already in the future keeps
+its dates. Ticket type sales windows move by the same number of weeks so the copy can
+actually go on sale. The rule is decision 16 in `docs/decisions.md`.
+
+Nothing transactional or historical is copied: no orders, order items, tickets,
+payments, refunds, check-ins, promo campaigns or redemptions, staff assignments,
+paid-sales activation, suspension or support cases.
+
+The response is the same event shape as `GET /api/events/:id/manage`, with
+`paid_sales_active: false` and empty history. The copy's timeline starts with
+`event.created`, then `event.duplicated`, whose description names the source event id.
 
 ---
 
@@ -1033,11 +1115,11 @@ campaign report counts paid orders that stand, so `gross_revenue` there and
 
 ## Audit log
 
-Not an endpoint yet. Every organizer, admin, payment and refund action writes one entry
-(SRS 4.9, 4.16, 7), and the event timeline (#62) will read them. Write entries with
-`recordAudit(client, entry)` from `src/lib/audit.ts`, using the transaction client, so
-the entry and the change commit or roll back together. Entries can't be edited or
-deleted: the table refuses both.
+Every organizer, admin, payment and refund action writes one entry (SRS 4.9, 4.16, 7).
+Read them for one event with `GET /api/events/:id/timeline` ("Event history and
+duplication" above). Write entries with `recordAudit(client, entry)` from
+`src/lib/audit.ts`, using the transaction client, so the entry and the change commit or
+roll back together. Entries can't be edited or deleted: the table refuses both.
 
 An entry has a timestamp, the acting user (null for the system), an action, the entity
 it's about, the event when there is one, and a short English description like
