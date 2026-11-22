@@ -39,13 +39,20 @@ npm ci
 cp .env.example .env        # defaults match docker-compose.yml
 docker compose up -d db     # Postgres 16 on 127.0.0.1:5432, nothing else
 npm run migrate
-npm run seed                # two users, two events, three ticket types
+npm run seed                # demo users, events and ticket types
 npm run dev                 # API on http://localhost:3000
 
 curl http://localhost:3000/api/events
 ```
 
 Frontend: `cd web && npm ci && npm run dev`, then http://localhost:3001.
+
+The seed resets these demo logins on every run, all with password `biletflow-dev`:
+
+- `organizer@biletflow.kz` (organizer)
+- `admin@biletflow.kz` (platform admin)
+- `attendee@biletflow.kz` (attendee, with tickets)
+- `door@biletflow.kz` (event admin assigned to the Astana Tech Meetup)
 
 `npm test` runs without a database. The tests that need a real Postgres (the
 last-ticket race, paid checkout) run when `TEST_DATABASE_URL` points at a separate,

@@ -11,9 +11,10 @@
  *
  * Idempotent: every row has a hard-coded id and is inserted with ON CONFLICT DO NOTHING,
  * and the whole run is one transaction. A second run inserts nothing and changes
- * nothing, not even updated_at. The price of that: dates are relative to the FIRST run
- * (now() at that moment) and then stay put, and editing this file does not change rows
- * that already exist. To start over, recreate the database.
+ * nothing except the users' password hashes, which are reset so the demo logins keep
+ * working. The price of that: dates are relative to the FIRST run (now() at that
+ * moment) and then stay put, and editing this file does not change other rows that
+ * already exist. To start over, recreate the database.
  *
  * The data follows the rules in the migrations and docs/api.md, so it is something the
  * API could have produced: money in tiyn, simulated payments (one per paid order, none
@@ -24,6 +25,7 @@
  *
  * This is fake data for development. Do not run it against anything real.
  */
+import bcrypt from 'bcryptjs';
 import { pool } from './pool';
 
 // ---------------------------------------------------------------------------
@@ -51,6 +53,7 @@ const MADINA_ID = seedId(0xb0, 2);
 const TIMUR_ID = seedId(0xb0, 3);
 const SOFIA_ID = seedId(0xb0, 4);
 const YERLAN_ID = seedId(0xb0, 5);
+const PLATFORM_ADMIN_ID = seedId(0xb0, 6);
 const EVENT_CANCELLED_ID = seedId(0xb1, 1);
 const TT_JAZZ_VIP_ID = seedId(0xb2, 1);
 const TT_CANCELLED_GENERAL_ID = seedId(0xb2, 2);
@@ -73,10 +76,9 @@ const PROCESSING_FEE_PERCENT = 3;
 // The organizer called the cancelled event off this many days ago and refunded right after.
 const EVENT_CANCELLED_DAYS_AGO = 22;
 
-// Auth exists now, but this seed does not hash a password: these users cannot log in.
-// TODO: replace with a real hash (same function the register endpoint uses) so the demo
-// organizer can open the analytics and promo pages in the browser.
-const PLACEHOLDER_HASH = 'seed-placeholder-not-a-real-hash';
+// Every seeded user logs in with this password. It is printed at the end of the run,
+// which is fine for dev data and would be a disaster anywhere else.
+const DEV_PASSWORD = 'biletflow-dev';
 
 // base64url-looking, 32 characters like the real tokens (24 random bytes). Known to
 // everybody who reads this file, which is fine for dev data and handy for a demo link.
@@ -90,6 +92,12 @@ const kzt = (tiyn: number): string => `${Number((tiyn / 100).toFixed(2))} KZT`;
 // ---------------------------------------------------------------------------
 const USERS = [
   { id: ORGANIZER_ID, email: 'organizer@biletflow.kz', name: 'Aigerim S.', role: 'organizer' },
+  {
+    id: PLATFORM_ADMIN_ID,
+    email: 'admin@biletflow.kz',
+    name: 'Platform Admin',
+    role: 'platform_admin',
+  },
   { id: ATTENDEE_ID, email: 'attendee@biletflow.kz', name: 'Aidos K.', role: 'attendee' },
   { id: EVENT_ADMIN_ID, email: 'door@biletflow.kz', name: 'Dana T.', role: 'event_admin' },
   { id: MADINA_ID, email: 'madina@biletflow.kz', name: 'Madina B.', role: 'attendee' },
@@ -346,6 +354,10 @@ const ORDERS: OrderSeed[] = [
 // The script
 // ---------------------------------------------------------------------------
 async function seed(): Promise<number> {
+  // Same rounds as routes/auth.ts, so login treats these like any other account. The
+  // password is reset on every run, in case somebody changed it while testing.
+  const passwordHash = await bcrypt.hash(DEV_PASSWORD, 10);
+
   const client = await pool.connect();
   let inserted = 0;
 
@@ -381,12 +393,18 @@ async function seed(): Promise<number> {
     await client.query('BEGIN');
 
     for (const u of USERS) {
-      await insert(
+      // Reset the password on every run, so a re-seed always gives working logins.
+      // xmax = 0 tells an insert from the update, and the summary counts only inserts.
+      const result = await client.query<{ inserted: boolean }>(
         `INSERT INTO users (id, email, password_hash, name, role, email_verified_at, created_at)
          VALUES ($1, $2, $3, $4, $5, now() - interval '90 days', now() - interval '90 days')
-         ON CONFLICT DO NOTHING`,
-        [u.id, u.email, PLACEHOLDER_HASH, u.name, u.role],
+         ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash
+         RETURNING (xmax = 0) AS inserted`,
+        [u.id, u.email, passwordHash, u.name, u.role],
       );
+      if (result.rows[0]?.inserted) {
+        inserted += 1;
+      }
     }
     // Users from the first version of this seed were created before email verification
     // existed, so they have no verified email. Fix those. On a second run no row matches,
@@ -778,6 +796,10 @@ async function printSummary(inserted: number): Promise<void> {
 
   console.log(
     `Demo data ready. New rows this run: ${inserted}${inserted === 0 ? ' (already seeded)' : ''}.`,
+  );
+  console.log(
+    `Demo logins (password ${DEV_PASSWORD}): organizer@biletflow.kz, attendee@biletflow.kz, ` +
+      `door@biletflow.kz, admin@biletflow.kz (platform admin).`,
   );
   if (s && community && jazzVip) {
     console.log(
