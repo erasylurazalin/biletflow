@@ -708,9 +708,35 @@ export async function getPromoByToken(token: string): Promise<PromoInfo> {
 // ---------------------------------------------------------------------------
 
 export type OrganizerEvent = EventListItem & {
+  phase: EventPhase;
   capacity: number;
   tickets_sold: number;
   checked_in: number;
+};
+
+export type EventPhase = 'draft' | 'cancelled' | 'upcoming' | 'active' | 'completed';
+
+export type AuditEntry = {
+  id: string;
+  created_at: string;
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  description: string;
+  actor: { id: string; name: string } | null;
+};
+
+export type EventTimelineResponse = {
+  entries: AuditEntry[];
+  actions: string[];
+  limit: number;
+  offset: number;
+};
+
+export type TimelineFilters = {
+  from?: string;
+  to?: string;
+  action?: string;
 };
 
 export type MyEventsResponse = {
@@ -758,6 +784,30 @@ export function listMyEvents(token: string, offset: number): Promise<MyEventsRes
     headers: { Authorization: `Bearer ${token}` },
     cache: 'no-store',
   });
+}
+
+export function getEventTimeline(
+  token: string,
+  id: string,
+  filters: TimelineFilters,
+  offset: number,
+): Promise<EventTimelineResponse> {
+  const params = new URLSearchParams();
+  if (filters.from) params.set('from', filters.from);
+  if (filters.to) params.set('to', filters.to);
+  if (filters.action) params.set('action', filters.action);
+  params.set('offset', String(offset));
+  return apiSend<EventTimelineResponse>(
+    `/api/events/${encodeURIComponent(id)}/timeline?${params.toString()}`,
+    { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' },
+  );
+}
+
+export async function duplicateEvent(token: string, id: string): Promise<{ event: EventDetail }> {
+  return apiSend<{ event: EventDetail }>(
+    `/api/events/${encodeURIComponent(id)}/duplicate`,
+    { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
+  );
 }
 
 export async function getManagedEvent(token: string, id: string): Promise<EventDetail> {

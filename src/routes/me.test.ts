@@ -445,6 +445,7 @@ describe('GET /api/me/events', () => {
     starts_at: new Date('2026-12-01T18:00:00.000Z'),
     ends_at: new Date('2026-12-01T21:00:00.000Z'),
     status: 'published',
+    phase: 'upcoming',
     cover_image_url: 'https://picsum.photos/seed/biletflow-tech/800/450',
     organizer_id: USER_ID,
     organizer_name: 'Aidos K.',
@@ -462,6 +463,7 @@ describe('GET /api/me/events', () => {
     starts_at: eventRow.starts_at.toISOString(),
     ends_at: eventRow.ends_at.toISOString(),
     status: eventRow.status,
+    phase: eventRow.phase,
     cover_image_url: eventRow.cover_image_url,
     organizer: { id: eventRow.organizer_id, name: eventRow.organizer_name },
     capacity: eventRow.capacity,
@@ -482,7 +484,7 @@ describe('GET /api/me/events', () => {
     });
     expect(String(query.mock.calls[0]?.[0])).toContain('WHERE e.organizer_id = $1');
     expect(String(query.mock.calls[0]?.[0])).toContain('ORDER BY e.created_at DESC');
-    expect(query.mock.calls[0]?.[1]).toEqual([USER_ID, 20, 0]);
+    expect(query.mock.calls[0]?.[1]).toEqual([USER_ID, 20, 0, null]);
     expect(query.mock.calls[0]?.[0]).toContain('capacity');
     expect(query.mock.calls[0]?.[0]).toContain('tickets_sold');
     expect(query.mock.calls[0]?.[0]).toContain('checked_in');
@@ -497,7 +499,28 @@ describe('GET /api/me/events', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ events: [], limit: 5, offset: 10 });
-    expect(query.mock.calls[0]?.[1]).toEqual([USER_ID, 5, 10]);
+    expect(query.mock.calls[0]?.[1]).toEqual([USER_ID, 5, 10, null]);
+  });
+
+  it('filters by phase and rejects an unknown phase', async () => {
+    query.mockResolvedValueOnce(rows([]));
+
+    const filtered = await request(app)
+      .get('/api/me/events?phase=completed')
+      .set('Authorization', bearer('organizer'));
+
+    expect(filtered.status).toBe(200);
+    expect(query.mock.calls[0]?.[1]).toEqual([USER_ID, 20, 0, 'completed']);
+    expect(String(query.mock.calls[0]?.[0])).toContain('AS phase');
+
+    query.mockReset();
+    const invalid = await request(app)
+      .get('/api/me/events?phase=soon')
+      .set('Authorization', bearer('organizer'));
+
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error.code).toBe('VALIDATION_ERROR');
+    expect(query).not.toHaveBeenCalled();
   });
 
   it('returns an empty list when I have no events', async () => {

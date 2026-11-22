@@ -290,33 +290,46 @@ eventsRouter.post('/', requireAuth, async (req, res, next) => {
 
     // New events always start as drafts. Status is not something the client gets to
     // set on creation. Publishing is a separate endpoint (POST /:id/publish).
-    const result = await pool.query<EventDetailRow>(
-      `WITH inserted AS (
-         INSERT INTO events (title, description, venue_name, venue_address, starts_at,
-                              ends_at, cover_image_url, refund_policy, organizer_id, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft')
-         RETURNING id, title, description, venue_name, venue_address, starts_at, ends_at,
-                   status, cover_image_url, refund_policy, organizer_id
-       )
-       SELECT inserted.*, u.name AS organizer_name
-         FROM inserted
-         JOIN users u ON u.id = inserted.organizer_id`,
-      [
-        title,
-        description,
-        venue_name,
-        venue_address,
-        starts_at,
-        ends_at,
-        cover_image_url ?? null,
-        refund_policy ?? null,
-        req.user!.id,
-      ],
-    );
-    const event = result.rows[0];
-    if (!event) {
-      throw new AppError(ErrorCode.INTERNAL_ERROR, 'Failed to create event', 500);
-    }
+    const event = await withTransaction(async (client) => {
+      const result = await client.query<EventDetailRow>(
+        `WITH inserted AS (
+           INSERT INTO events (title, description, venue_name, venue_address, starts_at,
+                                ends_at, cover_image_url, refund_policy, organizer_id, status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft')
+           RETURNING id, title, description, venue_name, venue_address, starts_at, ends_at,
+                     status, cover_image_url, refund_policy, organizer_id
+         )
+         SELECT inserted.*, u.name AS organizer_name
+           FROM inserted
+           JOIN users u ON u.id = inserted.organizer_id`,
+        [
+          title,
+          description,
+          venue_name,
+          venue_address,
+          starts_at,
+          ends_at,
+          cover_image_url ?? null,
+          refund_policy ?? null,
+          req.user!.id,
+        ],
+      );
+      const created = result.rows[0];
+      if (!created) {
+        throw new AppError(ErrorCode.INTERNAL_ERROR, 'Failed to create event', 500);
+      }
+
+      // Every event timeline starts here (SRS 4.16). The entry commits with the event.
+      await recordAudit(client, {
+        actorId: req.user!.id,
+        action: 'event.created',
+        entityType: 'event',
+        entityId: created.id,
+        eventId: created.id,
+        description: `Created the event "${created.title}"`,
+      });
+      return created;
+    });
 
     res.status(201).json({
       event: {
