@@ -1031,6 +1031,112 @@ campaign report counts paid orders that stand, so `gross_revenue` there and
 
 ---
 
+## Support cases
+
+SRS 4.13 and UC9. A logged-in user opens a case about an event they hold a paid
+order for (`event`), or an organizer opens one about their account, activation,
+payment or technical problem (`platform`). Every case has an asynchronous message
+thread; clients poll `GET /api/support/cases/:id` every 10 seconds (SRS 9: REST, no
+sockets).
+
+```
+POST  /api/support/cases                  { kind, event_id?, order_id?, ticket_id?, category, subject, body }
+                                          -> 201 { case }
+GET   /api/support/cases?limit&offset&status
+                                          -> { cases, limit, offset }
+GET   /api/support/cases/:id              -> { case, messages }
+POST  /api/support/cases/:id/messages     { body } -> 201 { message }
+PATCH /api/support/cases/:id              { status?, assigned_to? } -> 200 { case }
+```
+
+```json
+"case": {
+  "id": "uuid",
+  "kind": "event",
+  "event_id": "uuid" | null,
+  "event_title": "Astana Tech Meetup" | null,
+  "order_id": "uuid" | null,
+  "ticket_id": "uuid" | null,
+  "opened_by": "uuid",
+  "opened_by_name": "Aidos K.",
+  "category": "ticket_delivery",
+  "subject": "My ticket did not arrive",
+  "status": "open",
+  "assigned_to": "uuid" | null,
+  "assigned_to_name": "Aidos K." | null,
+  "role": "opener" | "responder",
+  "last_message_at": "2026-11-14T18:00:00Z",
+  "created_at": "...",
+  "updated_at": "..."
+}
+```
+
+The detail response (`GET /api/support/cases/:id` and the case returned after a
+successful `PATCH`) adds `responders`, the people allowed to reply for the
+organizer: `[{ "id": "uuid", "name": "Aidos K." }]`. The list response leaves it
+out.
+
+```json
+"message": {
+  "id": "uuid",
+  "case_id": "uuid",
+  "author_id": "uuid",
+  "author_name": "Aidos K.",
+  "is_responder": true,
+  "body": "Your ticket is attached to the order.",
+  "created_at": "..."
+}
+```
+
+**Creating a case.** `kind` is `event` or `platform`. `category` is one of
+`ticket_delivery`, `payment`, `refund`, `seating`, `event_information`, `check_in`,
+`account`, `technical`. `subject` is 1 to 200 characters and `body` is 1 to 5000
+characters; both are trimmed. The first message is written in the same transaction
+as the case. New cases are `open` with no assignee.
+
+- `event` needs `event_id`. The caller must hold a paid order for that event
+  (`404 EVENT_NOT_FOUND` otherwise). `order_id` and `ticket_id` are optional
+  context. Each must belong to the caller and to that event or the response is
+  `404 ORDER_NOT_FOUND` / `404 TICKET_NOT_FOUND`. They are context only: the paid
+  order that grants access may be a different one.
+- `platform` needs an organizer profile and role `organizer`; anybody else gets
+  `403 FORBIDDEN`. It carries no event, order or ticket context (`400` if any is
+  sent).
+
+**Who sees a case.** The opener and the case's responders. For an `event` case the
+responders are the event's organizer (`events.organizer_id`) and every user in
+`event_staff` for that event. For a `platform` case every `platform_admin` is a
+responder. Anyone else gets `404 SUPPORT_CASE_NOT_FOUND` on every case endpoint,
+including a platform admin on an event case they are not part of. A non-responder
+participant (the opener) can read the case and reply, but `PATCH` answers
+`403 FORBIDDEN`.
+
+**Status and assignment.** Statuses are `open`, `in_progress`, `waiting_for_customer`
+and `resolved`. Any status may move to any other, only a responder may change it,
+and nothing changes it automatically. `GET /api/support/cases?status=` filters by
+one status. `assigned_to` is nullable; setting it requires a responder of that case
+(`400` otherwise), and `null` clears the assignment. A `PATCH` must send at least
+one of `status` and `assigned_to`.
+
+**List order.** `GET /api/support/cases` returns every case the caller participates
+in, as opener or as responder, newest activity first (`last_message_at`, then id).
+The `role` field is `opener` when the caller opened the case and `responder`
+otherwise, so the same endpoint serves both sides of the conversation.
+
+**Messages and email.** Any participant may reply, including to a resolved case;
+messages come oldest first. When a responder replies, the opener gets a simulated
+email. When a responder changes the status, the opener gets one too. When the opener
+replies, the email goes to the assignee if there is one, otherwise to the event's
+organizer for an event case, and to nobody for a platform case. Every email links to
+`/support/<id>`. Messages themselves write no audit entry.
+
+Every case writes `support_case.opened`; a status change writes
+`support_case.status_changed`, and an assignment change writes
+`support_case.assigned`. For an event case all three carry the event id, so they
+appear on the event timeline.
+
+---
+
 ## Audit log
 
 Not an endpoint yet. Every organizer, admin, payment and refund action writes one entry
@@ -1072,7 +1178,9 @@ Use these action names and no others. A new one goes into this table and into
 | `ticket.check_in_reversed`            | ticket            | a check-in is undone                                            |
 | `promo_code.created`                  | promo_code        | a promo code is created                                         |
 | `promo_code.disabled`                 | promo_code        | a promo code is switched off                                    |
-| `support_case.status_changed`         | support_case      | a support case changes status                                   |
+| `support_case.opened`                 | support_case      | a user opens a support case                                     |
+| `support_case.status_changed`         | support_case      | a responder changes a support case status                       |
+| `support_case.assigned`               | support_case      | a responder assigns or unassigns a support case                 |
 | `user.suspended`                      | user              | a platform admin suspends an account (no event)                 |
 | `user.unsuspended`                    | user              | a platform admin lifts it                                       |
 
@@ -1080,7 +1188,7 @@ Use these action names and no others. A new one goes into this table and into
 
 ## Not specified yet
 
-Seat maps, support chat. We add these when we
+Seat maps. We add these when we
 get to them. Don't design them now.
 
 ---

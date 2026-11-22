@@ -54,7 +54,9 @@ export const AUDIT_ACTIONS = [
   'ticket.check_in_reversed',
   'promo_code.created',
   'promo_code.disabled',
+  'support_case.opened',
   'support_case.status_changed',
+  'support_case.assigned',
   'user.suspended',
   'user.unsuspended',
 ] as const;

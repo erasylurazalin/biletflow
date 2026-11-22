@@ -21,6 +21,7 @@ import { ordersRouter } from './routes/orders';
 import { paidSalesRouter } from './routes/paid-sales';
 import { promoCampaignsRouter } from './routes/promo-campaigns';
 import { staffRouter } from './routes/staff';
+import { supportRouter } from './routes/support';
 import { ticketTypesRouter } from './routes/ticket-types';
 import { ticketsRouter } from './routes/tickets';
 import { errorHandler, notFoundHandler } from './middleware/error-handler';
@@ -47,6 +48,7 @@ export function createApp() {
   app.use('/api', organizerOrdersRouter);
   app.use('/api', promoCampaignsRouter);
   app.use('/api', analyticsRouter);
+  app.use('/api', supportRouter);
   app.use('/api', adminRouter);
   app.use('/api', devRouter);
 

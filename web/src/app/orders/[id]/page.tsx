@@ -110,6 +110,12 @@ function Checkout() {
         {t.checkout.back}
       </Link>
       <h1 className="mt-4 text-2xl font-semibold">{order.event.title}</h1>
+      <Link
+        href={`/support/new?event=${order.event.id}&order=${order.id}`}
+        className="mt-2 inline-block text-sm font-medium underline"
+      >
+        {t.support.getHelp}
+      </Link>
 
       <ul className="mt-6 divide-y divide-zinc-200 rounded-lg border border-zinc-200 bg-white px-5">
         {order.items.map((item) => (
@@ -220,6 +226,12 @@ function Checkout() {
                 <p className="mt-1 text-sm text-zinc-500">
                   {fill(t.common.status, { status: t.ticketStatus[ticket.status] })}
                 </p>
+                <Link
+                  href={`/support/new?event=${order.event.id}&order=${order.id}&ticket=${ticket.id}`}
+                  className="mt-2 inline-block text-sm font-medium underline"
+                >
+                  {t.support.getHelp}
+                </Link>
               </li>
             ))}
           </ul>

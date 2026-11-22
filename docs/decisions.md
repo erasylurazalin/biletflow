@@ -408,3 +408,65 @@ Kazakh name on an admission document is worse than shipping a font.
 **Where.** `src/lib/ticket-pdf.ts`, `src/routes/tickets.ts`, `assets/fonts/`,
 `web/src/api.ts`, `web/src/app/tickets/page.tsx`, the "Printable ticket (PDF)" part of
 `docs/api.md`.
+
+---
+
+## 14. Support cases are visible only to the opener and the case's responders
+
+**Decision.** A case is either `event` or `platform`. An `event` case needs an event
+the caller holds a paid order for. Its optional order and ticket context must belong
+to the caller and to that event, and mismatches read as 404 like every other
+attendee resource. They are context only: the paid order that grants access may be a
+different order. A `platform` case is open only to a user whose stored role is
+`organizer` and who has an organizer profile, and it carries no event, order or
+ticket context.
+
+The participants are the opener plus the responders. For an `event` case the
+responders are the event's organizer and every `event_staff` member of that event;
+for a `platform` case every user with role `platform_admin`. Anyone else gets 404
+`SUPPORT_CASE_NOT_FOUND` on every case endpoint, platform admins on foreign event
+cases included, so case ids cannot be probed. A participant who cannot respond (the
+opener) gets 403 on `PATCH`. The list's `role` is `opener` for the user who opened
+the case even if that user is also a responder, because the case is still theirs;
+authorization to respond is decided by the relationship, not by the label.
+
+Statuses move freely among `open`, `in_progress`, `waiting_for_customer` and
+`resolved`, only a responder changes them, and nothing changes them automatically.
+`assigned_to` is nullable, must name a responder of the same case, and `null`
+unassigns. A case starts `open`, unassigned, with its first message in the same
+transaction. A resolved case still accepts replies.
+
+The case object carries the event title flat as `event_title` and `last_message_at`
+for list ordering. The detail response also carries `responders`, so the web page can
+offer an assignee picker without another endpoint. List order is newest activity
+first. Email follows the rule in the task: a responder reply or status change mails
+the opener, an opener reply mails the assignee, else the event organizer for an event
+case, else nobody. A user is never mailed about their own message. Only opening, a
+status change and an assignment change write audit entries; a message is not an
+organizer or administrator action.
+
+The web thread polls `GET /api/support/cases/:id` every 10 seconds. There are no
+sockets, as SRS 9 requires.
+
+**SRS basis.** 4.13 (context from an event, order or ticket, categories, asynchronous
+thread, assignment and the four statuses, notifications, history and access control);
+UC9 (an attendee opens from an event, order or ticket and the organizer replies);
+section 9 (REST with periodic refresh, no real-time sockets); section 11, success
+criterion 6; SRS 4.10 lists new support messages, assignments and status changes as
+notifications.
+
+**Rejected.** Letting an organizer open an event case for an event they have no paid
+order for: the decided rule grants event access through a paid order, and staff
+already have the organizer dashboard for their own events. Letting platform admins
+see every event case: responders for an event case are defined by the event, and a
+platform admin with no relationship has no business reading its thread. Automatically
+moving a case to `waiting_for_customer` after a staff reply: the decided rule says no
+automatic status changes. A second endpoint for the responder list: one small array
+on the detail response is enough for the assignee picker. Sending a case confirmation
+email on creation: the task lists only replies and status changes, and in-app history
+is the confirmation.
+
+**Where.** `migrations/011_support_cases.sql`, `src/routes/support.ts`,
+`src/lib/audit.ts`, `src/lib/errors.ts`, the "Support cases" section of
+`docs/api.md`, `web/src/app/support/`, `web/src/api.ts`, the dictionaries and the
+support entry links on the ticket, order, event, header and organizer profile pages.

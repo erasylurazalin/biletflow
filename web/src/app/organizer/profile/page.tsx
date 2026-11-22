@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
 import {
@@ -261,6 +262,13 @@ function ProfileForm({ initialProfile }: { initialProfile: OrganizerProfile | nu
         >
           {t.organizerProfile.identityBtn}
         </button>
+      ) : null}
+      {profile ? (
+        <p className="mt-6 border-t border-zinc-200 pt-4 text-sm">
+          <Link href="/support/new?kind=platform" className="font-medium underline">
+            {t.support.contactPlatform}
+          </Link>
+        </p>
       ) : null}
     </div>
   );

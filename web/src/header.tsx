@@ -69,6 +69,9 @@ export function Header() {
               <Link href="/orders" className="text-zinc-600 hover:text-zinc-900">
                 {t.header.myOrders}
               </Link>
+              <Link href="/support" className="text-zinc-600 hover:text-zinc-900">
+                {t.support.nav}
+              </Link>
               <span className="font-medium">{user.name}</span>
               {user.role === 'organizer' ? (
                 <>
