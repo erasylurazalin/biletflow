@@ -148,8 +148,8 @@ authRouter.post('/login', async (req, res, next) => {
     }
     const { email, password } = parsed.data;
 
-    const result = await pool.query<UserRow & { password_hash: string }>(
-      `SELECT id, email, name, role, password_hash, email_verified_at
+    const result = await pool.query<UserRow & { password_hash: string; suspended_at: Date | null }>(
+      `SELECT id, email, name, role, password_hash, email_verified_at, suspended_at
          FROM users
         WHERE lower(email) = $1`,
       [email],
@@ -161,6 +161,17 @@ authRouter.post('/login', async (req, res, next) => {
     const passwordOk = await bcrypt.compare(password, row?.password_hash ?? DUMMY_HASH);
     if (!row || !passwordOk) {
       throw AppError.unauthorized('Email or password is incorrect');
+    }
+
+    // SRS 4.12: a suspended account cannot log in. The check is after the password, so
+    // only somebody who knows the password learns that the account is suspended.
+    // Existing tokens are not checked against the database (docs/decisions.md, 15).
+    if (row.suspended_at != null) {
+      throw new AppError(
+        ErrorCode.ACCOUNT_SUSPENDED,
+        'This account is suspended. Contact the platform administrator.',
+        403,
+      );
     }
 
     res.json({ user: toUser(row), token: signToken(row) });

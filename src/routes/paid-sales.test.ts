@@ -49,6 +49,7 @@ const freshRow = {
   payout_account: true,
   terms_accepted_at: null,
   activated_at: null,
+  activation_fee: 500000,
   payment_amount: null,
   payment_currency: null,
   payment_method: null,
@@ -123,6 +124,17 @@ describe('GET /api/events/:id/paid-sales', () => {
       currency: 'KZT',
       paid_at: PAID_AT,
     });
+  });
+
+  it('reads the current fee from platform settings, not a constant', async () => {
+    query.mockResolvedValueOnce(rows([{ ...freshRow, activation_fee: 750000 }]));
+
+    const res = await request(app)
+      .get(`/api/events/${EVENT_ID}/paid-sales`)
+      .set('Authorization', bearer());
+
+    expect(res.body.paid_sales.activation_fee.amount).toBe(750000);
+    expect(statements()[0]).toContain('platform_settings');
   });
 
   it("returns 403 on somebody else's event", async () => {

@@ -189,4 +189,358 @@ describe.skipIf(!TEST_DATABASE_URL)('suspending an event against a real database
 
     expect(await listedIds()).toContain(eventId);
   });
+
+  // -------------------------------------------------------------------------
+  // Users
+  // -------------------------------------------------------------------------
+
+  async function admin(): Promise<{ id: string; token: string }> {
+    const user = await register('Platform admin');
+    await pool.query(`UPDATE users SET role = 'platform_admin' WHERE id = $1`, [user.id]);
+    return {
+      id: user.id,
+      token: signToken({ id: user.id, role: 'platform_admin' }),
+    };
+  }
+
+  it('finds a user by email, suspends the login, and unsuspending restores it', async () => {
+    const platformAdmin = await admin();
+    const victim = await register('Suspended person');
+    const victimEmail = (
+      await pool.query<{ email: string }>('SELECT email FROM users WHERE id = $1', [victim.id])
+    ).rows[0]!.email;
+
+    const search = await request(app)
+      .get(`/api/admin/users?q=${encodeURIComponent(victimEmail)}`)
+      .set('Authorization', `Bearer ${platformAdmin.token}`);
+    expect(search.status).toBe(200);
+    expect(search.body.users).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: victim.id, email: victimEmail, suspended: false }),
+      ]),
+    );
+
+    const suspended = await request(app)
+      .post(`/api/admin/users/${victim.id}/suspend`)
+      .set('Authorization', `Bearer ${platformAdmin.token}`);
+    expect(suspended.status).toBe(200);
+    expect(suspended.body.user).toMatchObject({
+      id: victim.id,
+      suspended: true,
+      suspended_by: platformAdmin.id,
+    });
+
+    const refused = await request(app)
+      .post('/api/auth/login')
+      .send({ email: victimEmail, password: 'test-password' });
+    expect(refused.status).toBe(403);
+    expect(refused.body.error.code).toBe('ACCOUNT_SUSPENDED');
+
+    const lifted = await request(app)
+      .post(`/api/admin/users/${victim.id}/unsuspend`)
+      .set('Authorization', `Bearer ${platformAdmin.token}`);
+    expect(lifted.status).toBe(200);
+    expect(lifted.body.user).toMatchObject({ suspended: false, suspended_at: null });
+
+    const allowed = await request(app)
+      .post('/api/auth/login')
+      .send({ email: victimEmail, password: 'test-password' });
+    expect(allowed.status).toBe(200);
+
+    const audits = await pool.query<{ action: string; actor_id: string }>(
+      `SELECT action, actor_id FROM audit_log
+        WHERE entity_id = $1 AND action IN ('user.suspended', 'user.unsuspended')`,
+      [victim.id],
+    );
+    expect(audits.rows.map((row) => row.action).sort()).toEqual([
+      'user.suspended',
+      'user.unsuspended',
+    ]);
+    expect(audits.rows.every((row) => row.actor_id === platformAdmin.id)).toBe(true);
+  });
+
+  it('refuses to suspend the admin themselves or another platform admin', async () => {
+    const first = await admin();
+    const second = await admin();
+
+    const self = await request(app)
+      .post(`/api/admin/users/${first.id}/suspend`)
+      .set('Authorization', `Bearer ${first.token}`);
+    expect(self.status).toBe(409);
+
+    const other = await request(app)
+      .post(`/api/admin/users/${second.id}/suspend`)
+      .set('Authorization', `Bearer ${first.token}`);
+    expect(other.status).toBe(409);
+  });
+
+  // -------------------------------------------------------------------------
+  // Reports
+  // -------------------------------------------------------------------------
+
+  it('reports a published event, then a suspend action hides it and actions the report', async () => {
+    const platformAdmin = await admin();
+    const reporter = await register('Reporter');
+    const { eventId } = await publishedEvent();
+
+    const created = await request(app)
+      .post(`/api/events/${eventId}/report`)
+      .set('Authorization', `Bearer ${reporter.token}`)
+      .send({ reason: 'The description looks like spam' });
+    expect(created.status).toBe(201);
+    const reportId = created.body.report.id as string;
+    expect(created.body.report).toMatchObject({
+      event: { id: eventId, suspended: false },
+      status: 'open',
+    });
+
+    const duplicate = await request(app)
+      .post(`/api/events/${eventId}/report`)
+      .set('Authorization', `Bearer ${reporter.token}`)
+      .send({ reason: 'Again' });
+    expect(duplicate.status).toBe(409);
+    expect(duplicate.body.error.code).toBe('CONFLICT');
+
+    const open = await request(app)
+      .get('/api/admin/reports?status=open')
+      .set('Authorization', `Bearer ${platformAdmin.token}`);
+    expect(open.status).toBe(200);
+    expect(open.body.reports).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: reportId, status: 'open' })]),
+    );
+
+    const resolved = await request(app)
+      .post(`/api/admin/reports/${reportId}/resolve`)
+      .set('Authorization', `Bearer ${platformAdmin.token}`)
+      .send({ action: 'suspend' });
+    expect(resolved.status).toBe(200);
+    expect(resolved.body.report).toMatchObject({ id: reportId, status: 'actioned' });
+
+    expect(await listedIds()).not.toContain(eventId);
+    const reports = await pool.query<{ status: string }>(
+      `SELECT status FROM event_reports WHERE event_id = $1`,
+      [eventId],
+    );
+    expect(reports.rows.map((row) => row.status)).toEqual(['actioned']);
+
+    const audit = await pool.query<{ actor_id: string }>(
+      `SELECT actor_id FROM audit_log
+        WHERE event_id = $1 AND action = 'event.suspended'`,
+      [eventId],
+    );
+    expect(audit.rows[0]?.actor_id).toBe(platformAdmin.id);
+  });
+
+  it('dismisses a report and records event_report.dismissed', async () => {
+    const platformAdmin = await admin();
+    const reporter = await register('Reporter');
+    const { eventId } = await publishedEvent();
+    const created = await request(app)
+      .post(`/api/events/${eventId}/report`)
+      .set('Authorization', `Bearer ${reporter.token}`)
+      .send({ reason: 'Not really a problem' });
+    expect(created.status).toBe(201);
+    const reportId = created.body.report.id as string;
+
+    const resolved = await request(app)
+      .post(`/api/admin/reports/${reportId}/resolve`)
+      .set('Authorization', `Bearer ${platformAdmin.token}`)
+      .send({ action: 'dismiss' });
+    expect(resolved.status).toBe(200);
+    expect(resolved.body.report.status).toBe('dismissed');
+
+    const audit = await pool.query<{ action: string; entity_type: string }>(
+      `SELECT action, entity_type FROM audit_log WHERE entity_id = $1`,
+      [reportId],
+    );
+    expect(audit.rows).toEqual([{ action: 'event_report.dismissed', entity_type: 'event_report' }]);
+    expect(await listedIds()).toContain(eventId);
+  });
+
+  // -------------------------------------------------------------------------
+  // Activation fee
+  // -------------------------------------------------------------------------
+
+  async function organizerWithPaidEvent(): Promise<{
+    token: string;
+    eventId: string;
+    ticketTypeId: string;
+  }> {
+    const user = await register('Fee organizer');
+    await pool.query('UPDATE users SET email_verified_at = now() WHERE id = $1', [user.id]);
+    const profile = await request(app)
+      .post('/api/me/organizer-profile')
+      .set('Authorization', `Bearer ${user.token}`)
+      .send({
+        display_name: 'Fee organizer',
+        contact_email: `${randomUUID()}@test.biletflow.kz`,
+        payout: { bank_name: 'Demo Bank', iban: 'KZ000000000000000000', account_holder: 'Fee' },
+      });
+    expect(profile.status).toBe(201);
+    const token = profile.body.token as string;
+
+    const startsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+    const created = await request(app)
+      .post('/api/events')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        title: `Fee event ${randomUUID()}`,
+        description: 'A paid event',
+        venue_name: 'Test venue',
+        venue_address: 'Test address',
+        starts_at: startsAt.toISOString(),
+        ends_at: new Date(startsAt.getTime() + 2 * 60 * 60 * 1000).toISOString(),
+      });
+    expect(created.status).toBe(201);
+    const eventId = created.body.event.id as string;
+
+    const ticketType = await request(app)
+      .post(`/api/events/${eventId}/ticket-types`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ name: 'Standard', price: 500000, quantity_total: 10 });
+    expect(ticketType.status).toBe(201);
+    const published = await request(app)
+      .post(`/api/events/${eventId}/publish`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(published.status).toBe(200);
+
+    return {
+      token,
+      eventId,
+      ticketTypeId: ticketType.body.ticket_type.id as string,
+    };
+  }
+
+  it('changes the next activation fee and keeps an already-paid one', async () => {
+    const platformAdmin = await admin();
+    const first = await organizerWithPaidEvent();
+    const second = await organizerWithPaidEvent();
+
+    const before = await request(app)
+      .get(`/api/events/${first.eventId}/paid-sales`)
+      .set('Authorization', `Bearer ${first.token}`);
+    expect(before.body.paid_sales.activation_fee.amount).toBe(500000);
+
+    const paidBefore = await request(app)
+      .post(`/api/events/${first.eventId}/paid-sales/activation-fee`)
+      .set('Authorization', `Bearer ${first.token}`);
+    expect(paidBefore.status).toBe(200);
+
+    try {
+      const changed = await request(app)
+        .patch('/api/admin/settings')
+        .set('Authorization', `Bearer ${platformAdmin.token}`)
+        .send({ activation_fee: 750000 });
+      expect(changed.status).toBe(200);
+      expect(changed.body.settings).toMatchObject({ activation_fee: 750000, currency: 'KZT' });
+
+      const after = await request(app)
+        .get(`/api/events/${first.eventId}/paid-sales`)
+        .set('Authorization', `Bearer ${first.token}`);
+      expect(after.body.paid_sales.activation_fee).toMatchObject({
+        amount: 750000,
+        payment: { amount: 500000, method: 'simulated', is_demonstration: true },
+      });
+
+      const paidAfter = await request(app)
+        .post(`/api/events/${second.eventId}/paid-sales/activation-fee`)
+        .set('Authorization', `Bearer ${second.token}`);
+      expect(paidAfter.status).toBe(200);
+      expect(paidAfter.body.paid_sales.activation_fee.payment.amount).toBe(750000);
+
+      const payments = await pool.query<{ amount: number }>(
+        `SELECT amount FROM payments WHERE event_id = ANY($1::uuid[]) ORDER BY amount`,
+        [[first.eventId, second.eventId]],
+      );
+      expect(payments.rows.map((row) => row.amount)).toEqual([500000, 750000]);
+
+      const audit = await pool.query<{ actor_id: string }>(
+        `SELECT actor_id FROM audit_log
+          WHERE action = 'platform_settings.updated' AND actor_id = $1`,
+        [platformAdmin.id],
+      );
+      expect(audit.rows.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      // Put the platform-wide default back so other database tests see 5,000 KZT.
+      await request(app)
+        .patch('/api/admin/settings')
+        .set('Authorization', `Bearer ${platformAdmin.token}`)
+        .send({ activation_fee: 500000 });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // CSV export
+  // -------------------------------------------------------------------------
+
+  it('exports a header and one row per order, with CSV quoting', async () => {
+    const platformAdmin = await admin();
+    const buyer = await register('CSV buyer');
+    const buyerEmail = (
+      await pool.query<{ email: string }>('SELECT email FROM users WHERE id = $1', [buyer.id])
+    ).rows[0]!.email;
+    // A comma and a quote in a field are exactly what the escaping has to handle.
+    await pool.query(`UPDATE users SET name = $2 WHERE id = $1`, [buyer.id, 'Buyer, "CSV"']);
+
+    const event = await publishedEvent();
+    const first = await order(buyer.token, event.eventId, event.ticketTypeId);
+    const second = await order(buyer.token, event.eventId, event.ticketTypeId);
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+
+    const csv = await request(app)
+      .get(`/api/admin/export/orders.csv?q=${encodeURIComponent(buyerEmail)}`)
+      .set('Authorization', `Bearer ${platformAdmin.token}`);
+    expect(csv.status).toBe(200);
+    expect(csv.headers['content-type']).toContain('text/csv');
+    const lines = (csv.text as string).split('\n');
+    expect(lines[0]).toContain('order_id,status,buyer_name');
+    expect(lines).toHaveLength(4); // header, two orders, and the trailing newline
+    expect(lines[1]).toContain('"Buyer, ""CSV"""');
+    expect((csv.text as string).split(first.body.order.id as string)).toHaveLength(2);
+    expect((csv.text as string).split(second.body.order.id as string)).toHaveLength(2);
+    expect(csv.text as string).toContain('0.00');
+  });
+
+  // -------------------------------------------------------------------------
+  // Authorization on every admin endpoint
+  // -------------------------------------------------------------------------
+
+  it('answers 401 anonymously and 403 to a non-admin on every admin endpoint', async () => {
+    const stranger = await register('Not an admin');
+    const endpoints: [string, string, unknown?][] = [
+      ['get', '/api/admin/users'],
+      ['post', `/api/admin/users/${stranger.id}/suspend`],
+      ['post', `/api/admin/users/${stranger.id}/unsuspend`],
+      ['get', '/api/admin/events'],
+      ['post', `/api/admin/events/33333333-3333-4333-8333-333333333333/suspend`],
+      ['post', `/api/admin/events/33333333-3333-4333-8333-333333333333/unsuspend`],
+      ['get', '/api/admin/reports'],
+      [
+        'post',
+        '/api/admin/reports/44444444-4444-4444-8444-444444444444/resolve',
+        { action: 'dismiss' },
+      ],
+      ['get', '/api/admin/settings'],
+      ['patch', '/api/admin/settings', { activation_fee: 500000 }],
+      ['get', '/api/admin/orders'],
+      ['get', '/api/admin/export/orders.csv'],
+      ['get', '/api/admin/export/refunds.csv'],
+    ];
+
+    for (const [method, path, body] of endpoints) {
+      const anonymousCall = request(app)[method as 'get'](path);
+      const anonymous =
+        body === undefined ? await anonymousCall : await anonymousCall.send(body as object);
+      expect(anonymous.status, `${method} ${path} without a token`).toBe(401);
+
+      const forbiddenCall = request(app)
+        [method as 'get'](path)
+        .set('Authorization', `Bearer ${stranger.token}`);
+      const forbidden =
+        body === undefined ? await forbiddenCall : await forbiddenCall.send(body as object);
+      expect(forbidden.status, `${method} ${path} as a non-admin`).toBe(403);
+      expect(forbidden.body.error.code).toBe('FORBIDDEN');
+    }
+  });
 });

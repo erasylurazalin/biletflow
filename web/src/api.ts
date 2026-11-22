@@ -944,6 +944,235 @@ export async function deleteTicketType(token: string, id: string): Promise<void>
   });
 }
 
+// ---------------------------------------------------------------------------
+// Platform administration (SRS 4.12, issue #63). Every call needs a
+// platform_admin token; the API answers 403 for every other role.
+// ---------------------------------------------------------------------------
+
+export type AdminUser = {
+  id: string;
+  email: string;
+  name: string;
+  role: User['role'];
+  email_verified: boolean;
+  suspended: boolean;
+  suspended_at: string | null;
+  suspended_by: string | null;
+  created_at: string;
+};
+
+export type AdminEvent = {
+  id: string;
+  title: string;
+  status: 'draft' | 'published' | 'cancelled';
+  suspended: boolean;
+  suspended_at: string | null;
+  starts_at: string;
+  ends_at: string;
+  organizer: { id: string; name: string; email: string };
+  open_reports: number;
+};
+
+export type AdminReportStatus = 'open' | 'dismissed' | 'actioned';
+
+export type AdminReport = {
+  id: string;
+  event: {
+    id: string;
+    title: string;
+    status: 'draft' | 'published' | 'cancelled';
+    suspended: boolean;
+  };
+  reported_by: { id: string; name: string; email: string };
+  reason: string;
+  status: AdminReportStatus;
+  created_at: string;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+};
+
+export type AdminOrder = {
+  id: string;
+  status: Order['status'];
+  buyer: { id: string; name: string; email: string };
+  event: { id: string; title: string };
+  subtotal: number;
+  discount: number;
+  processing_fee: number;
+  total: number;
+  created_at: string;
+  payment: SimulatedPayment | null;
+  refund: SimulatedRefund | null;
+  failed_payment_attempts: number;
+  last_payment_failed_at: string | null;
+};
+
+export type AdminSettings = {
+  activation_fee: number;
+  currency: string;
+  updated_at: string;
+  updated_by: string | null;
+};
+
+function adminQuery(params: Record<string, string | number | undefined>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== '') search.set(key, String(value));
+  }
+  const text = search.toString();
+  return text ? `?${text}` : '';
+}
+
+export async function searchAdminUsers(
+  token: string,
+  q: string,
+  offset = 0,
+): Promise<{ users: AdminUser[]; limit: number; offset: number }> {
+  return apiSend(`/api/admin/users${adminQuery({ q, limit: 100, offset })}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function setAdminUserSuspended(
+  userId: string,
+  suspend: boolean,
+  token: string,
+): Promise<AdminUser> {
+  const body = await apiSend<{ user: AdminUser }>(
+    `/api/admin/users/${encodeURIComponent(userId)}/${suspend ? 'suspend' : 'unsuspend'}`,
+    { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
+  );
+  return body.user;
+}
+
+export async function searchAdminEvents(
+  token: string,
+  filters: { q?: string; status?: string; offset?: number } = {},
+): Promise<{ events: AdminEvent[]; limit: number; offset: number }> {
+  return apiSend(
+    `/api/admin/events${adminQuery({
+      q: filters.q,
+      status: filters.status,
+      limit: 100,
+      offset: filters.offset ?? 0,
+    })}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+}
+
+export async function setAdminEventSuspended(
+  eventId: string,
+  suspend: boolean,
+  token: string,
+): Promise<{ id: string; suspended: boolean }> {
+  const body = await apiSend<{ event: { id: string; suspended: boolean } }>(
+    `/api/admin/events/${encodeURIComponent(eventId)}/${suspend ? 'suspend' : 'unsuspend'}`,
+    { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
+  );
+  return body.event;
+}
+
+export async function reportEvent(
+  eventId: string,
+  reason: string,
+  token: string,
+): Promise<AdminReport> {
+  const body = await apiSend<{ report: AdminReport }>(
+    `/api/events/${encodeURIComponent(eventId)}/report`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    },
+  );
+  return body.report;
+}
+
+export async function listAdminReports(
+  token: string,
+  status: AdminReportStatus = 'open',
+): Promise<AdminReport[]> {
+  const body = await apiSend<{ reports: AdminReport[] }>(
+    `/api/admin/reports${adminQuery({ status, limit: 100 })}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  return body.reports;
+}
+
+export async function resolveAdminReport(
+  reportId: string,
+  action: 'dismiss' | 'suspend',
+  token: string,
+): Promise<AdminReport> {
+  const body = await apiSend<{ report: AdminReport }>(
+    `/api/admin/reports/${encodeURIComponent(reportId)}/resolve`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    },
+  );
+  return body.report;
+}
+
+export async function getAdminSettings(token: string): Promise<AdminSettings> {
+  const body = await apiSend<{ settings: AdminSettings }>('/api/admin/settings', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return body.settings;
+}
+
+export async function updateAdminSettings(
+  activationFee: number,
+  token: string,
+): Promise<AdminSettings> {
+  const body = await apiSend<{ settings: AdminSettings }>('/api/admin/settings', {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ activation_fee: activationFee }),
+  });
+  return body.settings;
+}
+
+export async function searchAdminOrders(
+  token: string,
+  filters: { q?: string; status?: string; offset?: number } = {},
+): Promise<{ orders: AdminOrder[]; limit: number; offset: number }> {
+  return apiSend(
+    `/api/admin/orders${adminQuery({
+      q: filters.q,
+      status: filters.status,
+      limit: 100,
+      offset: filters.offset ?? 0,
+    })}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+}
+
+// The CSV endpoints answer a file, so this is the blob variant of apiSend. The browser
+// fetches it with the token and saves it, which a plain link cannot do.
+export async function downloadAdminCsv(
+  kind: 'orders' | 'refunds',
+  token: string,
+  filters: { q?: string; status?: string } = {},
+): Promise<Blob> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `/api/admin/export/${kind}.csv${adminQuery({ q: filters.q, status: filters.status })}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+  } catch {
+    throw new ApiError(0, unreachableMessage(), 'API_UNREACHABLE');
+  }
+
+  if (!response.ok) {
+    const { message, code } = await messageFromResponse(response);
+    throw new ApiError(response.status, message, code);
+  }
+  return response.blob();
+}
+
 export function formatPrice(tiyn: number, locale: Locale): string {
   if (tiyn === 0) return dictionaries[locale].common.free;
   return formatMoney(tiyn, locale);

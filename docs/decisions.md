@@ -411,6 +411,70 @@ Kazakh name on an admission document is worse than shipping a font.
 
 ---
 
+## 15. Administration: immediate login suspension, report review, one platform fee, and CSV exports
+
+**Decision.** Platform administration adds four pieces, all reached only by
+`platform_admin`:
+
+- **Users.** `users.suspended_at` and `users.suspended_by` are a flag and an actor, with
+  a CHECK that keeps them together. A suspended user cannot log in: login answers
+  `403 ACCOUNT_SUSPENDED` after the password check. An admin cannot suspend themselves
+  or another platform administrator (409), and an already suspended account is 409.
+  Unsuspending clears both fields and writes `user.unsuspended`. Already-issued JWTs
+  are not checked against the database, so an existing session ends when its token
+  expires (7 days), while login is refused immediately. `requireAuth` stays a pure JWT
+  check on purpose: changing it would make every unit test's fake pool need a user
+  lookup, and the task rules forbid that change.
+- **Events and reports.** Event search returns every status with organizer name and
+  email, suspension state and the number of open reports. Any logged-in user can report
+  a published, unsuspended event with a reason of 1 to 1000 characters after trimming.
+  One open report per user per event is a partial unique index, so a duplicate is 409;
+  after a report is closed the same person may report again. The admin queue defaults
+  to open reports, oldest first. Dismissing one report writes
+  `event_report.dismissed`. Suspending through a report reuses the existing event
+  suspension function (same row lock, update and `event.suspended` audit) and then marks
+  every open report on that event `actioned`. If the event is already suspended, the
+  reports are still actioned but no second suspension entry is written.
+- **Activation fee.** `platform_settings` holds one row, starting at `500000` tiyn
+  (5,000 KZT) and refusing a negative number. `GET` and `PATCH /api/admin/settings`
+  expose it, and `PATCH` writes `platform_settings.updated`. Paid sales reads the
+  current fee inside its existing query, so a change applies to the next fee payment.
+  An already-paid fee keeps the amount stored on its `payments` row and the paid-sales
+  response shows the current amount next to that payment.
+- **Orders and exports.** Order search matches order id or buyer email and includes
+  every status, the payment, the refund, and failed payment attempts counted from
+  `order.payment_failed` audit entries (a failed payment writes no `payments` row).
+  Orders and refunds export as UTF-8 CSV with a header row. Amounts are tenge with two
+  decimals, timestamps are ISO 8601 UTC, and values containing a comma, quote or newline
+  are quoted with embedded quotes doubled. The optional `q` and `status` filters narrow
+  an export to the same slice as the list.
+
+**SRS basis.** 2.1 (an administrative web portal), 4.12 (search users, events, orders
+and payments; suspend users and events; review reported events; monitor refunds and
+payment failures; configure activation fees and platform settings; export operational
+reports), 4.5 (the activation fee and the platform admin's moderation role), 3.3 (the
+fee amount is left to us), 7 and 4.9 (administrator actions are auditable), 4.6 (every
+payment and refund is simulated and labelled).
+
+**Rejected.** Checking `users.suspended_at` inside `requireAuth`: it would add a query
+to every authenticated request and force a fake user row into every existing unit test
+that uses a fake pool. Deleting a suspended account: SRS 4.12 says suspend, not delete,
+and orders and audit rows must keep pointing at the account. Letting a platform admin
+suspend another platform admin: it would let one admin lock out the rest, and there is
+no separate recovery path. Treating the fee as a per-event activation record for this
+task: the SRS asks for platform settings, already-paid amounts are financial records and
+must not move, and per-event paid-sales suspension or activation records were outside
+the tested scope of issue #63. Returning all orders through the CSV endpoint with no
+filter: a large export is hard to test and hard to read, and the same list filters cost
+nothing.
+
+**Where.** `migrations/012_admin.sql`, `src/routes/admin.ts`, `src/routes/auth.ts`,
+`src/routes/paid-sales.ts`, `src/lib/errors.ts`, `src/lib/audit.ts`, the "Admin: users",
+"Admin: searching events", "Reported events", "Admin: platform settings" and
+"Admin: orders and CSV exports" sections of `docs/api.md`, `web/src/app/admin/`,
+`web/src/report-event-button.tsx`, `web/src/header.tsx`, `web/src/api.ts` and the three
+dictionaries in `web/src/i18n/dictionaries/`.
+
 ## 16. Event history reads the audit log, and duplication copies configuration by whole weeks
 
 **Decision.** Every event has a computed `phase` on `GET /api/me/events`: `draft` or

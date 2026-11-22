@@ -7,6 +7,7 @@ import type { Dictionary } from './index';
 export function errorText(err: unknown, t: Dictionary): string {
   if (!(err instanceof ApiError)) return t.common.genericError;
   if (err.code === 'API_UNREACHABLE') return t.errors.unreachable;
+  if (err.code === 'ACCOUNT_SUSPENDED') return t.admin.accountSuspended;
   if (err.code === 'TICKET_SOLD_OUT') return t.errors.soldOut || err.message;
   if (err.code === 'SALES_CLOSED') return t.errors.salesClosed || err.message;
   return t.apiMessages[err.message] ?? err.message;
