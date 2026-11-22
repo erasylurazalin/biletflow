@@ -8,6 +8,7 @@ import {
   cancelEvent,
   createTicketType,
   deleteTicketType,
+  duplicateEvent,
   formatWhen,
   getManagedEvent,
   publishEvent,
@@ -83,6 +84,7 @@ function EventManage({ initialEvent }: { initialEvent: EventDetail }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [pending, setPending] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
   const cancelled = event.status === 'cancelled';
   const eventPath = `/organizer/events/${event.id}`;
   const ticketTypes = event.ticket_types;
@@ -172,6 +174,15 @@ function EventManage({ initialEvent }: { initialEvent: EventDetail }) {
         setEditing(null);
       }
     });
+  }
+
+  function duplicate() {
+    if (!window.confirm(t.history.duplicateConfirm)) return;
+    setDuplicating(true);
+    void mutate(async (token) => {
+      const { event: copy } = await duplicateEvent(token, event.id);
+      router.push(`/organizer/events/${copy.id}`);
+    }).finally(() => setDuplicating(false));
   }
 
   return (
@@ -301,8 +312,14 @@ function EventManage({ initialEvent }: { initialEvent: EventDetail }) {
             {t.events.cancelEventBtn}
           </button>
         ) : null}
+        <button type="button" disabled={pending} onClick={duplicate} className={buttonClass}>
+          {duplicating ? t.history.duplicating : t.history.duplicate}
+        </button>
       </div>
       <div className="mt-4 flex flex-wrap gap-4">
+        <Link href={`${eventPath}/timeline`} className={textButtonClass}>
+          {t.history.timelineLink}
+        </Link>
         <Link href={`${eventPath}/analytics`} className={textButtonClass}>
           {t.analytics.title}
         </Link>

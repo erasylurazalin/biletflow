@@ -520,7 +520,7 @@ promoCampaignsRouter.get('/promo/:token', async (req, res, next) => {
     }
 
     const covered = campaign.ticket_type_ids
-      ? `WHERE tt.id = ANY($2::uuid[])`
+      ? `WHERE tt.event_id = $1 AND tt.id = ANY($2::uuid[])`
       : `WHERE tt.event_id = $1 AND tt.is_hidden = false`;
     const types = await pool.query<PromoTicketTypeRow>(
       `SELECT tt.id, tt.name, tt.price,

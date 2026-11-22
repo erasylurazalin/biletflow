@@ -384,9 +384,14 @@ meRouter.get('/emails', requireAuth, async (req, res, next) => {
 // GET /api/me/events  - the caller's own events, with counts
 // ---------------------------------------------------------------------------
 
+// docs/decisions.md 16: a published event is upcoming, active or completed depending on
+// where now sits between its start and end. Draft and cancelled win over the dates.
+const EVENT_PHASES = ['draft', 'cancelled', 'upcoming', 'active', 'completed'] as const;
+
 const myEventsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   offset: z.coerce.number().int().min(0).default(0),
+  phase: z.enum(EVENT_PHASES).optional(),
 });
 
 interface MyEventRow {
@@ -398,6 +403,7 @@ interface MyEventRow {
   starts_at: Date;
   ends_at: Date;
   status: string;
+  phase: (typeof EVENT_PHASES)[number];
   cover_image_url: string | null;
   organizer_id: string;
   organizer_name: string;
@@ -417,7 +423,7 @@ meRouter.get('/events', requireAuth, async (req, res, next) => {
           : 'Invalid query',
       );
     }
-    const { limit, offset } = parsed.data;
+    const { limit, offset, phase } = parsed.data;
 
     const result = await pool.query<MyEventRow>(
       `SELECT e.id,
@@ -428,6 +434,13 @@ meRouter.get('/events', requireAuth, async (req, res, next) => {
               e.starts_at,
               e.ends_at,
               e.status,
+              CASE
+                WHEN e.status = 'draft' THEN 'draft'
+                WHEN e.status = 'cancelled' THEN 'cancelled'
+                WHEN e.starts_at > now() THEN 'upcoming'
+                WHEN e.ends_at <= now() THEN 'completed'
+                ELSE 'active'
+              END AS phase,
               e.cover_image_url,
               u.id   AS organizer_id,
               u.name AS organizer_name,
@@ -455,9 +468,17 @@ meRouter.get('/events', requireAuth, async (req, res, next) => {
                GROUP BY t.event_id
          ) ci ON ci.event_id = e.id
         WHERE e.organizer_id = $1
+          AND ($4::text IS NULL OR
+               (CASE
+                  WHEN e.status = 'draft' THEN 'draft'
+                  WHEN e.status = 'cancelled' THEN 'cancelled'
+                  WHEN e.starts_at > now() THEN 'upcoming'
+                  WHEN e.ends_at <= now() THEN 'completed'
+                  ELSE 'active'
+                END) = $4)
         ORDER BY e.created_at DESC, e.id DESC
         LIMIT $2 OFFSET $3`,
-      [req.user!.id, limit, offset],
+      [req.user!.id, limit, offset, phase ?? null],
     );
 
     res.json({
@@ -470,6 +491,7 @@ meRouter.get('/events', requireAuth, async (req, res, next) => {
         starts_at: row.starts_at,
         ends_at: row.ends_at,
         status: row.status,
+        phase: row.phase,
         cover_image_url: row.cover_image_url,
         organizer: { id: row.organizer_id, name: row.organizer_name },
         capacity: row.capacity,

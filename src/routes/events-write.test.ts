@@ -8,7 +8,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 
-vi.mock('../db/pool', () => ({ pool: { query: vi.fn() } }));
+vi.mock('../db/pool', () => {
+  const query = vi.fn();
+  const clientQuery = vi.fn((sql: string, ...args: unknown[]) => {
+    if (/^(BEGIN|COMMIT|ROLLBACK)$/.test(sql.trim())) {
+      return Promise.resolve({ rows: [] });
+    }
+    return query(sql, ...args);
+  });
+  return {
+    pool: {
+      query,
+      connect: vi.fn(async () => ({ query: clientQuery, release: vi.fn() })),
+    },
+  };
+});
 
 import { pool } from '../db/pool';
 import { createApp } from '../app';
@@ -73,7 +87,7 @@ beforeEach(() => {
 
 describe('POST /api/events', () => {
   it('creates a draft event for an organizer and returns 201', async () => {
-    query.mockResolvedValueOnce(rows([eventRow]));
+    query.mockResolvedValueOnce(rows([eventRow])).mockResolvedValueOnce(rows([]));
 
     const res = await request(app)
       .post('/api/events')

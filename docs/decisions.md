@@ -474,3 +474,56 @@ nothing.
 "Admin: orders and CSV exports" sections of `docs/api.md`, `web/src/app/admin/`,
 `web/src/report-event-button.tsx`, `web/src/header.tsx`, `web/src/api.ts` and the three
 dictionaries in `web/src/i18n/dictionaries/`.
+
+## 16. Event history reads the audit log, and duplication copies configuration by whole weeks
+
+**Decision.** Every event has a computed `phase` on `GET /api/me/events`: `draft` or
+`cancelled` from `status`, otherwise `upcoming` when the start is in the future,
+`completed` when the end has passed, and `active` in between. `?phase=` filters on that
+same expression. The event timeline is
+`GET /api/events/:id/timeline`, newest first, over the existing append-only
+`audit_log`. It is readable by the event's organizer, a user in that event's
+`event_staff`, and a `platform_admin`; anyone else and any unknown id gets
+`404 EVENT_NOT_FOUND`. Every status answers, including cancelled and suspended events.
+A plain `from` or `to` date covers that whole day in Kazakhstan time (`Asia/Almaty`),
+and both ends are inclusive. `action` is restricted to `AUDIT_ACTIONS`, and the response
+also carries the distinct actions that exist for the event so the web filter offers
+only those. Creating an event now writes `event.created` in the same transaction, which
+is how the timeline starts; the seed already wrote this entry, and the create endpoint
+was the one gap.
+
+Duplication is `POST /api/events/:id/duplicate`. Only the organizer may call it, and
+others and unknown ids get the same 404 as the timeline. The copy is always a `draft`
+and never suspended. It copies the event's descriptive fields, `refund_policy`, start
+and end times, and every ticket type configuration column. When the source start is not
+in the future, the start and end move forward by whole weeks until it is: the weekday
+and local time of day stay the same because the shift is an exact multiple of seven
+days. Ticket type sales windows move by the same number of weeks, otherwise a past
+event would be copied with its sales already closed. Orders, order items, tickets,
+payments, refunds, check-ins, promo campaigns and redemptions, staff assignments,
+paid-sales activation, suspension and support cases are not copied. The new event gets
+`event.created` and `event.duplicated`; the second description names the source id.
+
+**SRS basis.** 4.16 classifies events as Upcoming, Active, Completed or Cancelled, asks
+for a chronological timeline with timestamp, actor, action, entity and description,
+filters by date range and activity type, limits staff to events they manage, and allows
+platform admins to read it for support. UC12 and success criterion 11 say a past event
+can be duplicated without copying historical transactions. Section 7 requires event
+history to use the same event-level authorization as the records it describes.
+
+**Rejected.** A stored `phase` column: it would be wrong the moment the clock passes a
+start or end. A stored event timeline separate from `audit_log`: two histories would
+drift. Returning 403 to an outsider or to an unknown id: a 404 does not confirm that an
+event exists. Dropping the actor when the account is gone: the entry keeps the text it
+was written with, and only the actor object becomes null. Shifting a past event to
+"tomorrow" instead of by whole weeks: that would silently change the weekday and the
+time of day. Copying ticket type sales windows unchanged: the draft would look reusable
+but could never sell a ticket. Copying promo campaigns so the same code works again:
+codes, redemptions and limits are history, not configuration.
+
+**Where.** `src/routes/me.ts`, `src/routes/event-history.ts`, `src/routes/events.ts`,
+`src/lib/audit.ts`, `web/src/app/organizer/events/page.tsx`,
+`web/src/app/organizer/events/[id]/page.tsx`,
+`web/src/app/organizer/events/[id]/timeline/page.tsx`, `web/src/api.ts`,
+`web/src/i18n/dictionaries/`, the "My events" and "Event history and duplication"
+sections of `docs/api.md`.

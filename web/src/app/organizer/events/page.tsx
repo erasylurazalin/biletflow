@@ -3,11 +3,20 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { ApiError, formatWhen, listMyEvents, type MyEventsResponse } from '@/api';
+import {
+  ApiError,
+  formatWhen,
+  listMyEvents,
+  type EventPhase,
+  type MyEventsResponse,
+} from '@/api';
 import { useI18n } from '@/i18n/client';
 import { errorText } from '@/i18n/errors';
 import { clearSession, readToken, useSessionUser } from '@/session';
 import { buttonClass } from './event-form';
+
+// The order SRS 4.16 lists the dashboard groups in. Empty groups are hidden.
+const PHASE_ORDER: EventPhase[] = ['upcoming', 'active', 'completed', 'cancelled', 'draft'];
 
 export default function MyEventsPage() {
   const { t } = useI18n();
@@ -76,6 +85,11 @@ function EventList({ offset, setOffset }: { offset: number; setOffset: (offset: 
       </p>
     );
 
+  const groups = PHASE_ORDER.map((phase) => ({
+    phase,
+    events: page.events.filter((event) => event.phase === phase),
+  })).filter((group) => group.events.length > 0);
+
   return (
     <>
       {page.events.length === 0 ? (
@@ -83,38 +97,47 @@ function EventList({ offset, setOffset }: { offset: number; setOffset: (offset: 
           {offset === 0 ? t.organizerEvents.empty : t.organizerEvents.noMoreEvents}
         </p>
       ) : (
-        <ul className="mt-6 divide-y divide-zinc-200 rounded-lg border border-zinc-200 bg-white">
-          {page.events.map((event) => (
-            <li key={event.id} className="flex flex-wrap justify-between gap-4 px-5 py-4">
-              <div>
-                <Link
-                  href={`/organizer/events/${event.id}`}
-                  className="text-lg font-medium hover:underline"
-                >
-                  {event.title}
-                </Link>
-                <p className="mt-1 text-sm text-zinc-600">
-                  {event.venue_name} · {event.venue_address}
-                </p>
-                <p className="mt-1 text-sm text-zinc-500">
-                  {formatWhen(event.starts_at, locale)} — {formatWhen(event.ends_at, locale)}
-                </p>
-                <p className="mt-2 text-sm text-zinc-600">{t.organizerEvents[event.status]}</p>
-              </div>
-              <div className="text-sm text-zinc-600">
-                <p>
-                  {t.organizerEvents.capacity}: {event.capacity}
-                </p>
-                <p>
-                  {t.organizerEvents.ticketsSold}: {event.tickets_sold}
-                </p>
-                <p>
-                  {t.organizerEvents.checkedIn}: {event.checked_in}
-                </p>
-              </div>
-            </li>
+        <div className="mt-6 space-y-8">
+          {groups.map((group) => (
+            <section key={group.phase}>
+              <h2 className="text-lg font-semibold">{t.history.phases[group.phase]}</h2>
+              <ul className="mt-3 divide-y divide-zinc-200 rounded-lg border border-zinc-200 bg-white">
+                {group.events.map((event) => (
+                  <li key={event.id} className="flex flex-wrap justify-between gap-4 px-5 py-4">
+                    <div>
+                      <Link
+                        href={`/organizer/events/${event.id}`}
+                        className="text-lg font-medium hover:underline"
+                      >
+                        {event.title}
+                      </Link>
+                      <p className="mt-1 text-sm text-zinc-600">
+                        {event.venue_name} · {event.venue_address}
+                      </p>
+                      <p className="mt-1 text-sm text-zinc-500">
+                        {formatWhen(event.starts_at, locale)} · {formatWhen(event.ends_at, locale)}
+                      </p>
+                      <p className="mt-2 text-sm text-zinc-600">
+                        {t.organizerEvents[event.status]}
+                      </p>
+                    </div>
+                    <div className="text-sm text-zinc-600">
+                      <p>
+                        {t.organizerEvents.capacity}: {event.capacity}
+                      </p>
+                      <p>
+                        {t.organizerEvents.ticketsSold}: {event.tickets_sold}
+                      </p>
+                      <p>
+                        {t.organizerEvents.checkedIn}: {event.checked_in}
+                      </p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
           ))}
-        </ul>
+        </div>
       )}
       {offset > 0 || page.events.length === page.limit ? (
         <div className="mt-4 flex gap-3">
