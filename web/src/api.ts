@@ -65,6 +65,63 @@ export type InboxEmail = {
   created_at: string;
 };
 
+// Support cases (docs/api.md "Support cases", SRS 4.13).
+export type SupportKind = 'event' | 'platform';
+export type SupportCategory =
+  | 'ticket_delivery'
+  | 'payment'
+  | 'refund'
+  | 'seating'
+  | 'event_information'
+  | 'check_in'
+  | 'account'
+  | 'technical';
+export type SupportStatus = 'open' | 'in_progress' | 'waiting_for_customer' | 'resolved';
+
+export type SupportCase = {
+  id: string;
+  kind: SupportKind;
+  event_id: string | null;
+  event_title: string | null;
+  order_id: string | null;
+  ticket_id: string | null;
+  opened_by: string;
+  opened_by_name: string;
+  category: SupportCategory;
+  subject: string;
+  status: SupportStatus;
+  assigned_to: string | null;
+  assigned_to_name: string | null;
+  role: 'opener' | 'responder';
+  last_message_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SupportResponder = { id: string; name: string };
+
+export type SupportCaseDetail = SupportCase & { responders: SupportResponder[] };
+
+export type SupportMessage = {
+  id: string;
+  case_id: string;
+  author_id: string;
+  author_name: string;
+  is_responder: boolean;
+  body: string;
+  created_at: string;
+};
+
+export type CreateSupportCaseInput = {
+  kind: SupportKind;
+  event_id?: string;
+  order_id?: string;
+  ticket_id?: string;
+  category: SupportCategory;
+  subject: string;
+  body: string;
+};
+
 export type SimulatedPayment = {
   method: 'simulated';
   is_demonstration: boolean;
@@ -458,6 +515,72 @@ export async function cancelRegistration(
   return body.order;
 }
 
+export async function listSupportCases(
+  token: string,
+  status?: SupportStatus,
+): Promise<SupportCase[]> {
+  const params = new URLSearchParams({ limit: '100' });
+  if (status) params.set('status', status);
+  const body = await apiSend<{ cases: SupportCase[] }>(`/api/support/cases?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return body.cases;
+}
+
+export function getSupportCase(
+  token: string,
+  caseId: string,
+): Promise<{ case: SupportCaseDetail; messages: SupportMessage[] }> {
+  return apiSend<{ case: SupportCaseDetail; messages: SupportMessage[] }>(
+    `/api/support/cases/${encodeURIComponent(caseId)}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+}
+
+export async function createSupportCase(
+  token: string,
+  input: CreateSupportCaseInput,
+): Promise<SupportCase> {
+  const body = await apiSend<{ case: SupportCase }>('/api/support/cases', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  return body.case;
+}
+
+export async function replyToSupportCase(
+  token: string,
+  caseId: string,
+  messageBody: string,
+): Promise<SupportMessage> {
+  const body = await apiSend<{ message: SupportMessage }>(
+    `/api/support/cases/${encodeURIComponent(caseId)}/messages`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body: messageBody }),
+    },
+  );
+  return body.message;
+}
+
+export async function updateSupportCase(
+  token: string,
+  caseId: string,
+  input: { status?: SupportStatus; assigned_to?: string | null },
+): Promise<SupportCaseDetail> {
+  const body = await apiSend<{ case: SupportCaseDetail }>(
+    `/api/support/cases/${encodeURIComponent(caseId)}`,
+    {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    },
+  );
+  return body.case;
+}
+
 export function registerAccount(input: {
   name: string;
   email: string;
@@ -631,6 +754,14 @@ export async function listEvents(): Promise<EventListItem[]> {
 
 export async function getEvent(id: string): Promise<EventDetail> {
   const body = await apiGet<{ event: EventDetail }>(`/api/events/${encodeURIComponent(id)}`);
+  return body.event;
+}
+
+// Client components cannot use getEvent: it calls the API URL directly, and the API
+// sends no CORS headers. The same-origin /api rewrite used by every browser call does
+// work, so pages that need a public event in the browser use this one.
+export async function getEventForBrowser(id: string): Promise<EventDetail> {
+  const body = await apiSend<{ event: EventDetail }>(`/api/events/${encodeURIComponent(id)}`, {});
   return body.event;
 }
 

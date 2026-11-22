@@ -129,6 +129,12 @@ export default function TicketsPage() {
                     <p className="mt-2 text-sm text-zinc-600">
                       {fill(t.common.status, { status: t.ticketStatus[ticket.status] })}
                     </p>
+                    <Link
+                      href={`/support/new?event=${ticket.event.id}&ticket=${ticket.id}`}
+                      className="mt-3 inline-block text-sm font-medium underline"
+                    >
+                      {t.support.getHelp}
+                    </Link>
                   </div>
                   <div className="shrink-0 space-y-3 self-center sm:self-start">
                     {ticket.status === 'valid' ? <TicketQr payload={ticket.qr_payload} /> : null}
