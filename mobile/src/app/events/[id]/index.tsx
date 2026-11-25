@@ -38,7 +38,7 @@ export default function EventScreen() {
 
     return (
         <ScrollView
-            style={styles.container}
+            style={styles.scrollContainer}
             contentContainerStyle={{ gap: 16, paddingBottom: 32 }}
             refreshControl={
                 <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.blue} />
