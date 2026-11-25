@@ -207,6 +207,7 @@ database, never stored:
   "status": "draft" | "published" | "cancelled",
   "phase": "draft" | "cancelled" | "upcoming" | "active" | "completed",
   "cover_image_url": "https://..." | null,
+  "category": "concert" | "conference" | "sport" | "theatre" | "education" | "other",
   "organizer": { "id": "uuid", "name": "..." },
   "capacity": 100,
   "tickets_sold": 43,
@@ -219,8 +220,8 @@ database, never stored:
 ## Events
 
 ```
-GET    /api/events                    public list (published, not suspended)
-GET    /api/events/:id                public detail (404 once suspended)
+GET    /api/events                    public list (published, public, not suspended)
+GET    /api/events/:id                public detail (404 once suspended or private)
 GET    /api/events/:id/manage         organizer detail (any status, includes hidden ticket types)
 POST   /api/events                    organizer creates (role organizer: has a profile)
 PATCH  /api/events/:id                organizer edits
@@ -230,7 +231,7 @@ POST   /api/events/:id/cancel         draft or published -> cancelled
 
 - The manage endpoint requires a token and returns the same event shape as public
   detail. Missing events and events owned by someone else return `404 EVENT_NOT_FOUND`.
-- Only the event's organizer can publish or cancel it. Unknown events return
+- Only the event's organizer can publish, unpublish or cancel it. Unknown events return
   `404 EVENT_NOT_FOUND`; other organizers get `403`.
 - Publishing requires at least one ticket type and a future start time. Published and
   cancelled events cannot be published again (`409 CONFLICT`).
@@ -251,6 +252,12 @@ POST   /api/events/:id/cancel         draft or published -> cancelled
   "ends_at": "2026-11-14T21:00:00Z",
   "status": "draft" | "published" | "cancelled",
   "cover_image_url": "https://...",
+  "category": "concert" | "conference" | "sport" | "theatre" | "education" | "other",
+  "visibility": "public" | "unlisted" | "private",
+  "registration_opens_at": "2026-11-01T09:00:00Z" | null,
+  "registration_closes_at": "2026-11-14T16:00:00Z" | null,
+  "capacity": 200 | null,
+  "max_tickets_per_order": 4 | null,
   "organizer": { "id": "uuid", "name": "..." },
   "paid_sales_active": false,
   "refund_policy": "Tickets are refundable in full until the event starts.",
@@ -265,11 +272,68 @@ POST   /api/events/:id/cancel         draft or published -> cancelled
 under a "Refund policy" heading on the event page. It is information only: nothing
 enforces it, and refunds work the same way with no policy set. Set and clear it
 through `POST /api/events` and `PATCH /api/events/:id` (`null` clears). It appears in
-every full event response (detail, create, update, publish, cancel), not in the list.
+every full event response (detail, manage, create, update, publish, unpublish, cancel), not in the list.
 
 The list endpoint returns events **without** `ticket_types` and `paid_sales_active`, and with a shortened
 description. Detail returns everything. Frontend should not assume list items are
 complete.
+
+### Event settings
+
+`POST /api/events` takes the settings below, each optional (defaults: `other`, `public`,
+and `null` for the other four), and `PATCH /api/events/:id` changes the ones sent. They
+appear in every full event response. List items carry only `category`: the public list
+holds nothing but public events, so the rest would say nothing new.
+
+- **`category`** is one of `concert`, `conference`, `sport`, `theatre`, `education`,
+  `other`. Anything else is `400 VALIDATION_ERROR`.
+- **`visibility`** decides who can find and use an event:
+  - `public`: in `GET /api/events` and open by id.
+  - `unlisted`: missing from `GET /api/events`, but `GET /api/events/:id` opens it and
+    it can be ordered. Anyone who has the link can use it.
+  - `private`: only its organizer can use it. The organizer reads it through
+    `GET /api/events/:id/manage` and may order its tickets. Everybody else gets
+    `404 EVENT_NOT_FOUND`, and so does `GET /api/events/:id` for every caller, because
+    that endpoint is public.
+
+  Visibility sits on top of `status`: a draft is never public, whatever its visibility,
+  and a suspended event stays hidden as before. The organizer's own list
+  (`GET /api/me/events`), the staff app and the admin views show events of every
+  visibility.
+
+- **`registration_opens_at`, `registration_closes_at`** are ISO 8601 date-times or
+  `null` (no limit on that side). When both are set, closing must be after opening
+  (`400 VALIDATION_ERROR`); on `PATCH` the value sent is compared with the stored one,
+  so changing one end alone is checked too. An order outside the window is
+  `409 SALES_CLOSED` ("Registration is not open yet" or "Registration has closed"). It
+  works together with each ticket type's own sales window: both must be open.
+- **`capacity`** is a whole number from 1, or `null`. It counts seats across all of the
+  event's ticket types, with the same rule as availability: orders that are `paid`, or
+  `pending` and not expired. An order that would go beyond it is
+  `409 TICKET_SOLD_OUT`. `null` leaves only the ticket types' own quantities. It may be
+  lower or higher than their sum. Setting it below the seats already sold or held is
+  `409 CONFLICT`.
+- **`max_tickets_per_order`** is a whole number from 1 to 10, or `null`, which means the
+  global limit of 10 (see "Creating an order"). An order with more tickets than that is
+  `400 VALIDATION_ERROR`, like the global limit. A value above 10 is
+  `400 VALIDATION_ERROR` too.
+
+### Unpublish and preview
+
+`POST /api/events/:id/unpublish` takes a published event back to `draft`.
+
+- Only the event's organizer: another organizer gets `403`, an unknown event
+  `404 EVENT_NOT_FOUND`.
+- Only a `published` event. A draft or a cancelled one is `409 CONFLICT`.
+- Only while no tickets are sold or held: if any order of the event is `paid`, or
+  `pending` and not expired, it is `409 CONFLICT` ("Tickets have been sold for this
+  event"). Refunded and cancelled orders do not count.
+- The response is the full event, like publish. It writes an `event.unpublished` audit
+  entry in the same transaction. The event can be published again later.
+
+Preview needs no new endpoint: the organizer reads their own event in any status, drafts
+included, through `GET /api/events/:id/manage`. `GET /api/events/:id` stays public and
+answers `404` for a draft, even to its owner.
 
 ### List responses
 
@@ -346,11 +410,13 @@ Only the event's organizer can duplicate it. Other organizers and unknown ids ge
 events.
 
 The new event is a `draft` and never suspended. It copies the title, description,
-`venue_name`, `venue_address`, `cover_image_url`, `refund_policy`, the start and end
+`venue_name`, `venue_address`, `cover_image_url`, `refund_policy`, the event settings
+(category, visibility, registration window, capacity, per-order limit), the start and end
 times, and every ticket type (name, price, currency, `quantity_total`, sales window,
 `is_hidden`). The start and end are moved forward by whole weeks until the start is in
 the future, keeping the weekday and time of day; an event already in the future keeps
-its dates. Ticket type sales windows move by the same number of weeks so the copy can
+its dates. The registration window and the ticket types' sales windows move by the same
+number of weeks so the copy can
 actually go on sale. The rule is decision 16 in `docs/decisions.md`.
 
 Nothing transactional or historical is copied: no orders, order items, tickets,
@@ -709,8 +775,8 @@ immediately, with no `payment` record. One code path, not two.
 All four need a token.
 
 - `items` has at least one entry, and each `ticket_type_id` appears once. `quantity` is
-  a whole number from 1 to 10, and the whole order is at most 10 tickets (SRS 4.3 asks
-  for a per-order limit; a limit the organizer sets comes later). Anything else is
+  a whole number from 1 to 10, and the whole order is at most 10 tickets, or the event's
+  `max_tickets_per_order` when that is lower (SRS 4.3). Anything else is
   `400 VALIDATION_ERROR`.
 - An item may include `attendee_names`, with exactly one name per ticket in its
   `quantity`. Each name is trimmed and must be 1 to 100 characters. A missing list is
@@ -718,6 +784,8 @@ All four need a token.
 - The event must be published. A draft or a missing event is `404 EVENT_NOT_FOUND`,
   the same as the public detail. A cancelled event is `409 CONFLICT`, and so is an event
   a platform admin has suspended (see "Admin: suspending an event").
+- A `private` event is `404 EVENT_NOT_FOUND` for everybody except its organizer, and an
+  `unlisted` one can be ordered by anyone who has its id (see "Event settings").
 - Every ticket type must belong to that event and must not be hidden, otherwise
   `400 VALIDATION_ERROR`. A hidden type is orderable only with a promo code whose
   campaign lists that type explicitly in `ticket_type_ids` (see "Promo codes and
@@ -726,7 +794,9 @@ All four need a token.
   inside the same transaction that creates the order. Every refusal is
   `409 PROMO_CODE_INVALID` (see "Promo codes and campaign QR codes").
 - Outside a ticket type's `sales_start_at` and `sales_end_at` the order is
-  `409 SALES_CLOSED`. Not enough left is `409 TICKET_SOLD_OUT`.
+  `409 SALES_CLOSED`, and so is an order outside the event's registration window.
+  Not enough left on the ticket type, or beyond the event's `capacity`, is
+  `409 TICKET_SOLD_OUT` (see "Event settings").
 - `name` and `unit_price` are copied from the ticket type into the order, so a later
   price change does not touch it. `subtotal` is the sum of the items. `discount` is
   `0` without a promo code, and the promo discount when a valid one is given (see
@@ -1452,6 +1522,7 @@ Use these action names and no others. A new one goes into this table and into
 | `event.created`                       | event             | an organizer creates an event                                   |
 | `event.updated`                       | event             | an organizer edits event details                                |
 | `event.published`                     | event             | a draft goes live                                               |
+| `event.unpublished`                   | event             | a published event goes back to draft                            |
 | `event.cancelled`                     | event             | an organizer cancels the event                                  |
 | `event.deleted`                       | event             | a draft is deleted                                              |
 | `event.duplicated`                    | event             | a past event is copied into a new draft (entity is the new one) |
