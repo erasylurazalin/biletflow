@@ -106,7 +106,7 @@ export default function Events() {
                     keyExtractor={({ id }) => id}
                     renderItem={({ item }) => <EventRow event={item} />}
                     ListEmptyComponent={
-                        error !== null ? <Text style={styles.errorText}>{error}</Text> : null
+                        error !== null ? <Text style={styles.errorText}>{error}</Text> : undefined
                     }
                     refreshControl={
                         <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.blue} />

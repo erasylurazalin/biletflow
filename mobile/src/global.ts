@@ -22,6 +22,12 @@ export const styles = StyleSheet.create({
         padding: 16,
         gap: 12,
     },
+    // A ScrollView may not take alignItems or justifyContent in style (React Native
+    // 0.88 throws); its layout goes in contentContainerStyle instead.
+    scrollContainer: {
+        flex: 1,
+        padding: 16,
+    },
     centered: {
         flex: 1,
         alignItems: "center",
