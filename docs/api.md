@@ -226,6 +226,7 @@ GET    /api/events/:id/manage         organizer detail (any status, includes hid
 POST   /api/events                    organizer creates (role organizer: has a profile)
 PATCH  /api/events/:id                organizer edits
 POST   /api/events/:id/publish        draft -> published
+POST   /api/events/:id/unpublish      published -> draft
 POST   /api/events/:id/cancel         draft or published -> cancelled
 ```
 
