@@ -130,7 +130,7 @@ export default function Attendees() {
                         <ActivityIndicator size="large" />
                     ) : error === null ? (
                         <Text style={styles.mutedText}>No attendees found</Text>
-                    ) : null
+                    ) : undefined
                 }
                 renderItem={({ item }) => (
                     <View style={styles.listRow}>
