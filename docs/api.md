@@ -336,6 +336,29 @@ Preview needs no new endpoint: the organizer reads their own event in any status
 included, through `GET /api/events/:id/manage`. `GET /api/events/:id` stays public and
 answers `404` for a draft, even to its owner.
 
+### Searching and filtering the public list
+
+`GET /api/events` takes these optional query parameters. They combine with AND, and the
+list still contains only published, non-suspended events.
+
+- **`q`** is 1 to 100 characters after trimming. It is a case-insensitive substring
+  match on the title, description, venue name or venue address, so `q=Almaty` also
+  finds an event whose address contains "Almaty". `%`, `_` and `\` match literally; they
+  are not wildcards. An empty value after trimming or more than 100 characters is
+  `400 VALIDATION_ERROR`.
+- **`from`, `to`** are plain dates `YYYY-MM-DD`, both inclusive. An event matches when
+  its `starts_at` falls on one of those local days in Kazakhstan time (`Asia/Almaty`),
+  so `to=2026-10-20` includes an event starting at 23:30 that day and excludes one just
+  after midnight on the next day. An impossible date such as `2026-02-31` is
+  `400 VALIDATION_ERROR`, and so is `from` later than `to`.
+- **`free`** is `true` or `false`. `true` keeps only events with at least one visible
+  ticket type whose price is `0`; a hidden free type does not count. `false` applies no
+  filter. Any other value is `400 VALIDATION_ERROR`.
+
+`limit` and `offset` page the matching events in ascending `starts_at` order. The
+envelope also carries `total`, the number of events matching the same filters with no
+paging, so a page can say "N events found" even when it shows only the first page.
+
 ### List responses
 
 Every list endpoint wraps its array in an envelope that echoes the paging used:
@@ -348,8 +371,9 @@ Every list endpoint wraps its array in an envelope that echoes the paging used:
 }
 ```
 
-Paging comes from the query string: `GET /api/events?limit=50&offset=50`. `limit`
-defaults to 20 and caps at 100, `offset` defaults to 0. `q` filters on the title.
+`GET /api/events` adds `total` to that envelope (see "Searching and filtering the public
+list"). Paging comes from the query string: `GET /api/events?limit=50&offset=50`. `limit`
+defaults to 20 and caps at 100, `offset` defaults to 0.
 
 The array key is the plural of what is listed (`events`, `orders`, `tickets`), so a
 client always reads `body.events` and never a bare array. This is our pick, not a
