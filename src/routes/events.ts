@@ -28,6 +28,7 @@ import { pool } from '../db/pool';
 import { withTransaction } from '../db/transaction';
 import { recordAudit } from '../lib/audit';
 import { AppError, ErrorCode } from '../lib/errors';
+import { PLAIN_DATE, isRealPlainDate, localMidnight } from '../lib/local-date';
 import { requireAuth } from '../middleware/auth';
 
 export const eventsRouter = Router();
@@ -38,12 +39,28 @@ export const eventsRouter = Router();
 
 // Query strings are always strings, so coerce and then validate. Defaults live here,
 // which means the handler below can assume it always has real numbers.
+const plainDateSchema = z
+  .string()
+  .regex(PLAIN_DATE, 'expected a date like 2026-10-20')
+  .refine(isRealPlainDate, { message: 'that date does not exist' });
+
 const listQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   offset: z.coerce.number().int().min(0).default(0),
-  // Optional free-text search on the title.
+  // Free-text search over the fields an attendee would type: title, description,
+  // venue name and venue address (docs/api.md, "List responses").
   q: z.string().trim().min(1).max(100).optional(),
+  // Plain local dates in Asia/Almaty. `to` is inclusive (see localMidnight below).
+  from: plainDateSchema.optional(),
+  to: plainDateSchema.optional(),
+  free: z.enum(['true', 'false']).optional(),
 });
+
+// Escape the wildcards so a user typing "%" or "_" searches for that character, not for
+// every event. The backslash itself goes first, or it would escape the escapes.
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
 
 // Shape of one row coming back from the list query. Naming the type keeps the mapping
 // below honest: rename a column in the SQL and TypeScript points at the mapping.
@@ -61,6 +78,29 @@ interface EventListRow {
   organizer_name: string;
 }
 
+// One WHERE clause shared by the page query and the total count, so both always filter
+// the same events. $1 search, $2 from, $3 to, $4 free only.
+const PUBLIC_EVENT_FILTERS = `
+        WHERE e.status = 'published'
+          AND e.suspended_at IS NULL
+          -- $1 is the already-escaped search text, or NULL for no search. ESCAPE makes
+          -- the backslash from escapeLike() mean a literal next character.
+          AND ($1::text IS NULL
+               OR e.title ILIKE '%' || $1 || '%' ESCAPE '\\'
+               OR e.description ILIKE '%' || $1 || '%' ESCAPE '\\'
+               OR e.venue_name ILIKE '%' || $1 || '%' ESCAPE '\\'
+               OR e.venue_address ILIKE '%' || $1 || '%' ESCAPE '\\')
+          AND ($2::timestamptz IS NULL OR e.starts_at >= $2)
+          AND ($3::timestamptz IS NULL OR e.starts_at < $3)
+          -- A visible free ticket type, not merely any zero-price type: an event whose
+          -- only free type is hidden does not show up under "Free only".
+          AND ($4::boolean IS NOT TRUE
+               OR EXISTS (SELECT 1
+                            FROM ticket_types tt
+                           WHERE tt.event_id = e.id
+                             AND tt.is_hidden = false
+                             AND tt.price = 0))`;
+
 eventsRouter.get('/', async (req, res, next) => {
   try {
     // safeParse instead of parse: we want our own 400 with a readable message rather
@@ -74,7 +114,24 @@ eventsRouter.get('/', async (req, res, next) => {
           : 'Invalid query',
       );
     }
-    const { limit, offset, q } = parsed.data;
+    const { limit, offset, q, from, to, free } = parsed.data;
+
+    const fromDate = from ? localMidnight(from) : null;
+    // `to` names a whole day, so the range stops at the next local midnight.
+    const toDate = to ? localMidnight(to, 1) : null;
+    if (fromDate && toDate && fromDate >= toDate) {
+      throw AppError.badRequest('"from" must not be later than "to"');
+    }
+    const filters = [q ? escapeLike(q) : null, fromDate, toDate, free === 'true'];
+
+    // The page and the total are separate queries because an offset past the last match
+    // must still report how many events matched. Both use the same fixed WHERE clause.
+    const totalResult = await pool.query<{ total: number }>(
+      `SELECT count(*)::int AS total
+         FROM events e
+         ${PUBLIC_EVENT_FILTERS}`,
+      filters,
+    );
 
     const result = await pool.query<EventListRow>(
       `SELECT e.id,
@@ -92,16 +149,10 @@ eventsRouter.get('/', async (req, res, next) => {
               u.name AS organizer_name
          FROM events e
          JOIN users u ON u.id = e.organizer_id
-        -- Public endpoint: drafts and cancelled events are nobody else's business, and
-        -- neither are events a platform admin has suspended (migration 010).
-        WHERE e.status = 'published'
-          AND e.suspended_at IS NULL
-          -- $3 is NULL when no search was given, and then this condition is TRUE for
-          -- every row. One query instead of two, without concatenating SQL.
-          AND ($3::text IS NULL OR e.title ILIKE '%' || $3 || '%')
+         ${PUBLIC_EVENT_FILTERS}
         ORDER BY e.starts_at ASC
-        LIMIT $1 OFFSET $2`,
-      [limit, offset, q ?? null],
+        LIMIT $5 OFFSET $6`,
+      [...filters, limit, offset],
     );
 
     // Timestamps are Date objects from pg; res.json() serialises them as ISO 8601 UTC,
@@ -119,6 +170,9 @@ eventsRouter.get('/', async (req, res, next) => {
         cover_image_url: row.cover_image_url,
         organizer: { id: row.organizer_id, name: row.organizer_name },
       })),
+      // How many events match the same filters with no paging, so the page can say
+      // "N events found" even when only the first page is shown.
+      total: totalResult.rows[0]?.total ?? 0,
       // The doc does not describe a list envelope, so this is our pick: echo back the
       // paging the client asked for. Announced in the group chat before it was written.
       limit,

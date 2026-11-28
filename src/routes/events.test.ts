@@ -17,6 +17,7 @@ vi.mock('../db/pool', () => ({ pool: { query: vi.fn() } }));
 
 import { pool } from '../db/pool';
 import { createApp } from '../app';
+import { localMidnight } from '../lib/local-date';
 
 const query = vi.mocked(pool.query);
 const app = createApp();
@@ -47,12 +48,13 @@ beforeEach(() => {
 
 describe('GET /api/events', () => {
   it('returns published events in the documented shape', async () => {
-    query.mockResolvedValueOnce(rows([eventRow]));
+    query.mockResolvedValueOnce(rows([{ total: 1 }])).mockResolvedValueOnce(rows([eventRow]));
 
     const res = await request(app).get('/api/events');
 
     expect(res.status).toBe(200);
     expect(res.body.events).toHaveLength(1);
+    expect(res.body.total).toBe(1);
     expect(res.body.events[0]).toMatchObject({
       id: eventRow.id,
       title: 'Astana Tech Meetup',
@@ -66,13 +68,14 @@ describe('GET /api/events', () => {
   });
 
   it('passes limit and offset through to the query', async () => {
-    query.mockResolvedValueOnce(rows([]));
+    query.mockResolvedValueOnce(rows([{ total: 0 }])).mockResolvedValueOnce(rows([]));
 
     const res = await request(app).get('/api/events?limit=5&offset=10');
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ limit: 5, offset: 10 });
-    expect(query.mock.calls[0]?.[1]).toEqual([5, 10, null]);
+    expect(res.body).toMatchObject({ limit: 5, offset: 10, total: 0 });
+    expect(query.mock.calls[0]?.[1]).toEqual([null, null, null, false]);
+    expect(query.mock.calls[1]?.[1]).toEqual([null, null, null, false, 5, 10]);
   });
 
   it('rejects a limit that is not a number, without touching the database', async () => {
@@ -81,6 +84,55 @@ describe('GET /api/events', () => {
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
     expect(query).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/events filters', () => {
+  it('rejects an impossible date without touching the database', async () => {
+    const res = await request(app).get('/api/events?from=2026-02-31');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('rejects a from date later than the to date', async () => {
+    const res = await request(app).get('/api/events?from=2026-05-16&to=2026-05-15');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('rejects a search longer than 100 characters', async () => {
+    const res = await request(app)
+      .get('/api/events')
+      .query({ q: 'x'.repeat(101) });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('rejects a free value other than true or false', async () => {
+    const res = await request(app).get('/api/events?free=maybe');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('trims and escapes the search text, and resolves plain dates to local days', async () => {
+    query.mockResolvedValueOnce(rows([{ total: 0 }])).mockResolvedValueOnce(rows([]));
+
+    const res = await request(app)
+      .get('/api/events')
+      .query({ q: '  100%_\\  ', from: '2030-05-15', to: '2030-05-15', free: 'true' });
+
+    expect(res.status).toBe(200);
+    const expected = [localMidnight('2030-05-15'), localMidnight('2030-05-15', 1), true];
+    expect(query.mock.calls[0]?.[1]).toEqual(['100\\%\\_\\\\', ...expected]);
+    expect(query.mock.calls[1]?.[1]).toEqual(['100\\%\\_\\\\', ...expected, 20, 0]);
   });
 });
 

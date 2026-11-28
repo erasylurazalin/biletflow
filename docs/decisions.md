@@ -587,3 +587,41 @@ codes, redemptions and limits are history, not configuration.
 `web/src/app/organizer/events/[id]/timeline/page.tsx`, `web/src/api.ts`,
 `web/src/i18n/dictionaries/`, the "My events" and "Event history and duplication"
 sections of `docs/api.md`.
+
+## 17. Event search covers four text fields, filters by Kazakhstan local days, and counts every match
+
+**Decision.** `GET /api/events` keeps its public rule (published and not suspended) and
+adds three optional filters, combined with AND. `q` is trimmed to 1 to 100 characters
+and is a case-insensitive substring match on the title, description, venue name or venue
+address, so a city name in the address is enough to find the event. `%`, `_` and `\` in
+`q` are escaped and match themselves. `from` and `to` are plain `YYYY-MM-DD` dates and
+both ends are inclusive. They compare the event's `starts_at` against local midnights in
+`Asia/Almaty`, so a start at 23:30 on the `to` day is inside the range and a start just
+after midnight the next day is outside it. An impossible date, or a `from` later than
+`to`, is `400 VALIDATION_ERROR`. `free=true` keeps events that have at least one visible
+ticket type priced `0`; a hidden free type does not count, and `free=false` applies no
+filter. Paging, ascending start order and the limit of 100 stay as they were. The list
+envelope gains `total`, the number of events matching the same filters with no paging,
+computed by a second query with the same fixed WHERE clause so an offset past the last
+match still reports the real total. The local-midnight helper moved to
+`src/lib/local-date.ts` and event history uses the same copy. The home page posts a plain
+GET form to `/?q=&from=&to=&free=true`, so the URL reproduces the search without
+JavaScript, and shows the `total` plus an empty state with a Clear link.
+
+**SRS basis.** The SRS says "Attendees will be able to discover events" and "Can browse
+events". A title-only match does not let somebody find events by city, and a date or
+price filter is how an attendee narrows a list they can browse.
+
+**Rejected.** Searching only the title, which misses the common "what is on in Almaty"
+query. Passing `q` straight into `ILIKE` without escaping, because then `%` or `_` would
+silently match everything. Filtering dates in UTC or in the server's zone: an event at
+23:30 in Kazakhstan would fall on the wrong day. Treating any zero-price type as free,
+including a hidden one, because the public page never shows that ticket. A separate
+count endpoint, which would be a second contract to keep in step. Returning all matches
+and counting them in the web app, which breaks once the list is paged.
+
+**Where.** `src/routes/events.ts`, `src/lib/local-date.ts`,
+`src/routes/event-history.ts`, `src/routes/events.test.ts`,
+`src/routes/events-search.db.test.ts`, `web/src/app/page.tsx`, `web/src/api.ts`,
+`web/src/i18n/dictionaries/`, the "Searching and filtering the public list" section of
+`docs/api.md`.
