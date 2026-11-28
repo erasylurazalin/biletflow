@@ -28,6 +28,8 @@ import { pool } from '../db/pool';
 import { withTransaction } from '../db/transaction';
 import { recordAudit } from '../lib/audit';
 import { AppError, ErrorCode } from '../lib/errors';
+import { calendarFilename, generateIcs } from '../lib/ics';
+import { webUrl } from '../lib/mailer';
 import { requireAuth } from '../middleware/auth';
 
 export const eventsRouter = Router();
@@ -240,6 +242,64 @@ function readEvent(owned: boolean): RequestHandler {
 
 eventsRouter.get('/:id', readEvent(false));
 eventsRouter.get('/:id/manage', requireAuth, readEvent(true));
+
+// ---------------------------------------------------------------------------
+// GET /api/events/:id/calendar.ics  - public calendar file for one event
+// ---------------------------------------------------------------------------
+
+interface CalendarEventRow {
+  id: string;
+  title: string;
+  description: string;
+  venue_name: string;
+  venue_address: string;
+  starts_at: Date;
+  ends_at: Date;
+}
+
+eventsRouter.get('/:id/calendar.ics', async (req, res, next) => {
+  try {
+    const parsed = idParamSchema.safeParse(req.params);
+    if (!parsed.success) {
+      throw AppError.badRequest('Event id must be a UUID');
+    }
+    const { id } = parsed.data;
+
+    // Exactly the public detail rule: a draft, cancelled or suspended event is not
+    // something an anonymous calendar link may reveal (docs/api.md "Events").
+    const result = await pool.query<CalendarEventRow>(
+      `SELECT e.id, e.title, e.description, e.venue_name, e.venue_address,
+              e.starts_at, e.ends_at
+         FROM events e
+        WHERE e.id = $1
+          AND e.status = 'published'
+          AND e.suspended_at IS NULL`,
+      [id],
+    );
+    const event = result.rows[0];
+    if (!event) {
+      throw AppError.notFound(ErrorCode.EVENT_NOT_FOUND, 'Event not found');
+    }
+
+    const url = `${webUrl()}/events/${event.id}`;
+    const ics = generateIcs({
+      id: event.id,
+      title: event.title,
+      description: event.description,
+      venueName: event.venue_name,
+      venueAddress: event.venue_address,
+      startsAt: event.starts_at,
+      endsAt: event.ends_at,
+      url,
+    });
+
+    res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${calendarFilename(event.title)}"`);
+    res.send(ics);
+  } catch (err) {
+    next(err);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // POST /api/events  - organizer creates a new draft event

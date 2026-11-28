@@ -222,6 +222,7 @@ database, never stored:
 ```
 GET    /api/events                    public list (published, public, not suspended)
 GET    /api/events/:id                public detail (404 once suspended or private)
+GET    /api/events/:id/calendar.ics   public .ics calendar file
 GET    /api/events/:id/manage         organizer detail (any status, includes hidden ticket types)
 POST   /api/events                    organizer creates (role organizer: has a profile)
 PATCH  /api/events/:id                organizer edits
@@ -278,6 +279,32 @@ every full event response (detail, manage, create, update, publish, unpublish, c
 The list endpoint returns events **without** `ticket_types` and `paid_sales_active`, and with a shortened
 description. Detail returns everything. Frontend should not assume list items are
 complete.
+
+### Calendar export (.ics)
+
+`GET /api/events/:id/calendar.ics` is public. For a published, unsuspended event it
+answers `200` with `Content-Type: text/calendar; charset=utf-8` and
+`Content-Disposition: attachment; filename="<slug-of-title>.ics"`.
+
+Draft, cancelled, suspended and unknown events are all `404 EVENT_NOT_FOUND`, the same
+as `GET /api/events/:id`, so the calendar link reveals nothing the event page does not.
+A non-UUID id is `400 VALIDATION_ERROR`.
+
+The body is one RFC 5545 `VCALENDAR` with `VERSION:2.0`,
+`PRODID:-//BiletFlow//Events//EN`, `CALSCALE:GREGORIAN`, `METHOD:PUBLISH` and one
+`VEVENT`:
+
+- `UID` is `<event id>@biletflow`; `DTSTAMP` is the current time in UTC.
+- `DTSTART` and `DTEND` use the UTC basic format `20261226T081500Z`.
+- `SUMMARY` is the title. `LOCATION` is the venue name and address.
+- `DESCRIPTION` is the first 500 characters of the event description, then a blank line,
+  then the event page URL built from `WEB_URL`. Newlines in text are escaped as `\n`.
+  `URL` is the same event page URL.
+
+Text escapes backslash, semicolon and comma per RFC 5545. Lines end in CRLF and fold at
+75 UTF-8 octets, with continuation lines starting with one space, so Kazakh and Russian
+titles survive. The filename is an ASCII slug of the title, or `event.ics` when the
+title has no ASCII letters or digits.
 
 ### Event settings
 

@@ -7,9 +7,12 @@ import {
   ApiError,
   downloadTicketPdf,
   formatWhen,
+  getEventForBrowser,
   listMyTickets,
+  type EventDetail,
   type Ticket,
 } from '@/api';
+import { downloadIcsHref, googleCalendarHref } from '@/calendar-links';
 import { useI18n } from '@/i18n/client';
 import { errorText } from '@/i18n/errors';
 import { fill } from '@/i18n/format';
@@ -23,6 +26,9 @@ export default function TicketsPage() {
   const [error, setError] = useState<string | null>(null);
   // The ticket whose PDF is being fetched, so only its button says "Preparing…".
   const [pending, setPending] = useState<string | null>(null);
+  // The public event detail behind each valid ticket. It has the end time and venue
+  // address the Google Calendar link needs; the ticket object itself does not.
+  const [calendarEvents, setCalendarEvents] = useState<Record<string, EventDetail>>({});
 
   useEffect(() => {
     const token = readToken();
@@ -52,6 +58,39 @@ export default function TicketsPage() {
       cancelled = true;
     };
   }, [router, t]);
+
+  useEffect(() => {
+    if (!tickets) return;
+
+    const eventIds = [
+      ...new Set(
+        tickets.filter((ticket) => ticket.status === 'valid').map((ticket) => ticket.event.id),
+      ),
+    ];
+    let cancelled = false;
+
+    Promise.all(
+      eventIds.map(async (eventId) => {
+        try {
+          return [eventId, await getEventForBrowser(eventId)] as const;
+        } catch {
+          // A cancelled or suspended event has no public detail and no calendar link.
+          return null;
+        }
+      }),
+    ).then((entries) => {
+      if (cancelled) return;
+      const next: Record<string, EventDetail> = {};
+      for (const entry of entries) {
+        if (entry) next[entry[0]] = entry[1];
+      }
+      setCalendarEvents(next);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [tickets]);
 
   // Fetched with the token, then handed to the browser as a download: the PDF is a
   // server-rendered document, never a link the browser opens on its own.
@@ -107,6 +146,7 @@ export default function TicketsPage() {
         <ul className="mt-6 space-y-4">
           {tickets.map((ticket) => {
             const unavailable = ticket.status === 'cancelled' || ticket.status === 'refunded';
+            const calendarEvent = calendarEvents[ticket.event.id];
             return (
               <li
                 key={ticket.id}
@@ -137,7 +177,32 @@ export default function TicketsPage() {
                     </Link>
                   </div>
                   <div className="shrink-0 space-y-3 self-center sm:self-start">
-                    {ticket.status === 'valid' ? <TicketQr payload={ticket.qr_payload} /> : null}
+                    {ticket.status === 'valid' ? (
+                      <>
+                        <div className="w-[240px] rounded-md border border-zinc-200 p-3 text-sm">
+                          <p className="font-medium">{t.calendar.addToCalendar}</p>
+                          <div className="mt-2 flex flex-col gap-2">
+                            <a
+                              href={downloadIcsHref(ticket.event.id)}
+                              className="font-medium underline"
+                            >
+                              {t.calendar.downloadIcs}
+                            </a>
+                            {calendarEvent ? (
+                              <a
+                                href={googleCalendarHref(calendarEvent)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-medium underline"
+                              >
+                                {t.calendar.googleCalendar}
+                              </a>
+                            ) : null}
+                          </div>
+                        </div>
+                        <TicketQr payload={ticket.qr_payload} />
+                      </>
+                    ) : null}
                     {/* Every status downloads: the PDF says the status itself. */}
                     <button
                       type="button"

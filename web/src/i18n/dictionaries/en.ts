@@ -12,6 +12,9 @@ export const en = {
   calendar: {
     dateTime: '{day} {month} {year}, {time}',
     months: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+    addToCalendar: 'Add to calendar',
+    downloadIcs: 'Download .ics',
+    googleCalendar: 'Google Calendar',
   },
   common: {
     genericError: 'Something went wrong. Try again.',

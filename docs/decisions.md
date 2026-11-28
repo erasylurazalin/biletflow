@@ -587,3 +587,42 @@ codes, redemptions and limits are history, not configuration.
 `web/src/app/organizer/events/[id]/timeline/page.tsx`, `web/src/api.ts`,
 `web/src/i18n/dictionaries/`, the "My events" and "Event history and duplication"
 sections of `docs/api.md`.
+
+---
+
+## 18. Calendar export is public and mirrors the public event page
+
+**Decision.** `GET /api/events/:id/calendar.ics` is anonymous and follows the same
+visibility rule as `GET /api/events/:id`: only a published, unsuspended event gets a
+file, and a draft, cancelled, suspended or unknown event is `404 EVENT_NOT_FOUND`. A
+non-UUID id is `400 VALIDATION_ERROR`, like every other event id.
+
+The file is one RFC 5545 `VCALENDAR` with one `VEVENT`. The event id forms the `UID`
+(`<id>@biletflow`), `DTSTAMP` is the current UTC time, and `DTSTART` and `DTEND` use
+the UTC basic format `20261226T081500Z`. Text escapes backslash, semicolon and comma,
+newlines become `\n`, lines end in CRLF, and lines fold at 75 UTF-8 octets without
+splitting a character. `DESCRIPTION` is the first 500 characters of the description, a
+blank line and the event page URL, and `URL` is that same page URL. The filename is an
+ASCII slug of the title, or `event.ics` when the title has no ASCII letters or digits.
+
+The web event page offers a same-origin `.ics` link and a Google Calendar template link
+built from the same fields. My tickets offers the same two links for each valid ticket,
+reading the public event detail for that ticket's event so it has the end time and
+venue address. That keeps the ticket API shape unchanged.
+
+**SRS basis.** The SRS bonus feature "Calendar export through .ics files and common
+calendar links". It builds on the public event page, which is already the one
+unauthenticated view of an event, and on the event page URL used by the rest of the
+product.
+
+**Rejected.** Requiring a token for the `.ics`: a calendar app opens the link on its
+own, without a BiletFlow session. Exporting drafts, cancelled or suspended events: the
+public event page hides them, and the calendar file must not become a second way to
+read them. A JSON calendar endpoint instead of a file: the bonus feature asks for
+`.ics` and calendar links. Putting `ends_at` and `venue_address` into the ticket API
+for the Google link: those fields belong to the event, and widening a shared ticket
+shape for one web page would reach the mobile app too.
+
+**Where.** `src/lib/ics.ts`, `src/routes/events.ts`, `web/src/calendar-links.ts`,
+`web/src/app/events/[id]/page.tsx`, `web/src/app/tickets/page.tsx`, the dictionaries,
+and the "Calendar export (.ics)" part of `docs/api.md`.

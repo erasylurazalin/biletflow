@@ -22,6 +22,9 @@ export const ru = {
       'нояб.',
       'дек.',
     ],
+    addToCalendar: 'Добавить в календарь',
+    downloadIcs: 'Скачать .ics',
+    googleCalendar: 'Google Calendar',
   },
   common: {
     genericError: 'Что-то пошло не так. Попробуйте ещё раз.',

@@ -22,6 +22,9 @@ export const kk = {
       'қар.',
       'жел.',
     ],
+    addToCalendar: 'Күнтізбеге қосу',
+    downloadIcs: '.ics жүктеу',
+    googleCalendar: 'Google Calendar',
   },
   common: {
     genericError: 'Бірдеңе дұрыс болмады. Қайталап көріңіз.',
