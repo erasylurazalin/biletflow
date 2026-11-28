@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ApiError, formatWhen, getEvent, getPromoByToken, type PromoInfo } from '@/api';
 import { ApiUnavailable } from '@/api-unavailable';
+import { downloadIcsHref, googleCalendarHref } from '@/calendar-links';
 import { errorText } from '@/i18n/errors';
 import { fill } from '@/i18n/format';
 import { getI18n } from '@/i18n/server';
@@ -73,6 +74,22 @@ export default async function EventPage({
         {formatWhen(event.starts_at, locale)} — {formatWhen(event.ends_at, locale)}
       </p>
       <p className="mt-4 max-w-2xl text-zinc-700">{event.description}</p>
+      <section className="mt-4 max-w-2xl">
+        <h2 className="text-sm font-medium text-zinc-800">{t.calendar.addToCalendar}</h2>
+        <div className="mt-2 flex flex-wrap gap-4 text-sm">
+          <a href={downloadIcsHref(event.id)} className="font-medium underline">
+            {t.calendar.downloadIcs}
+          </a>
+          <a
+            href={googleCalendarHref(event)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium underline"
+          >
+            {t.calendar.googleCalendar}
+          </a>
+        </div>
+      </section>
       {event.refund_policy ? (
         <section className="mt-4 max-w-2xl">
           <h2 className="text-sm font-medium text-zinc-800">{t.event.refundPolicy}</h2>
