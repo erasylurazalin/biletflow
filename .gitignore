@@ -147,3 +147,4 @@ vite.config.ts.timestamp-*
 
 # Database dumps from scripts/backup.sh. They hold password hashes and emails.
 backups/
+deploy/demo.env

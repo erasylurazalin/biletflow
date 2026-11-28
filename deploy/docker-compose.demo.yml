@@ -1,0 +1,20 @@
+# Public demo on a single server, on top of the main docker-compose.yml:
+#
+#   docker compose -p biletflow-demo -f docker-compose.yml -f deploy/docker-compose.demo.yml \
+#     --env-file deploy/demo.env up -d --build
+#
+# Only the web app gets a port, on loopback. It forwards /api to the API inside the
+# compose network, so the API and Postgres are not reachable from outside the server.
+# A reverse proxy or tunnel (we use Tailscale Funnel) puts HTTPS in front of WEB_PORT.
+services:
+  db:
+    ports: !reset []
+  api:
+    environment:
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in deploy/demo.env}
+      WEB_URL: ${WEB_URL:?set WEB_URL in deploy/demo.env}
+      SEED_PASSWORD: ${SEED_PASSWORD:?set SEED_PASSWORD in deploy/demo.env}
+    ports: !reset []
+  web:
+    ports: !override
+      - '127.0.0.1:${WEB_PORT:-3201}:3001'
