@@ -46,6 +46,17 @@ export const en = {
     loadError: 'Something went wrong loading events.',
     unavailable: 'The events API is unavailable',
   },
+  search: {
+    qLabel: 'Search events',
+    placeholder: 'Search by name, venue or city',
+    from: 'From',
+    to: 'To',
+    freeOnly: 'Free only',
+    submit: 'Search',
+    clear: 'Clear',
+    results: { one: '{count} event found', other: '{count} events found' } as Plural,
+    noMatches: 'No events match these filters. Try another search or clear the filters.',
+  },
   event: {
     back: '← Events',
     refundPolicy: 'Refund policy',

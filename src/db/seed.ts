@@ -76,9 +76,11 @@ const PROCESSING_FEE_PERCENT = 3;
 // The organizer called the cancelled event off this many days ago and refunded right after.
 const EVENT_CANCELLED_DAYS_AGO = 22;
 
-// Every seeded user logs in with this password. It is printed at the end of the run,
-// which is fine for dev data and would be a disaster anywhere else.
-const DEV_PASSWORD = 'biletflow-dev';
+// Every seeded user logs in with this password. The default is printed at the end of
+// the run, which is fine for dev data. A public demo sets SEED_PASSWORD instead
+// (deploy/README.md), because the default is in this file for anyone to read.
+const DEFAULT_PASSWORD = 'biletflow-dev';
+const DEV_PASSWORD = process.env.SEED_PASSWORD || DEFAULT_PASSWORD;
 
 // base64url-looking, 32 characters like the real tokens (24 random bytes). Known to
 // everybody who reads this file, which is fine for dev data and handy for a demo link.
@@ -798,7 +800,8 @@ async function printSummary(inserted: number): Promise<void> {
     `Demo data ready. New rows this run: ${inserted}${inserted === 0 ? ' (already seeded)' : ''}.`,
   );
   console.log(
-    `Demo logins (password ${DEV_PASSWORD}): organizer@biletflow.kz, attendee@biletflow.kz, ` +
+    `Demo logins (password ${DEV_PASSWORD === DEFAULT_PASSWORD ? DEV_PASSWORD : 'from SEED_PASSWORD'}): ` +
+      `organizer@biletflow.kz, attendee@biletflow.kz, ` +
       `door@biletflow.kz, admin@biletflow.kz (platform admin).`,
   );
   if (s && community && jazzVip) {
